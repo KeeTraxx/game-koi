@@ -20,14 +20,15 @@ This shapes how to work in this repo:
 
 ## State of the repo
 
-Steps 1-3 of the build order below are done; steps 4-7 are not started. `[dependencies]` is still
-empty and nothing draws to a screen. Treat the unfinished steps as a plan, and verify against the actual
-tree before assuming a subsystem exists.
+Steps 1-4 of the build order below are done; steps 5-7 are not started. `[dependencies]` is still empty:
+frames are rendered into a framebuffer but there is no window, so the only way to see output is
+`--screenshot`. Treat the unfinished steps as a plan, and verify against the actual tree before assuming
+a subsystem exists.
 
 - `src/cartridge/` — ROM loading and header parsing. No mapper support yet: only 32 KiB no-MBC ROMs.
-- `src/bus.rs` — the `Bus` trait (`read`/`write`/`tick`/`pending_interrupt`/`acknowledge_interrupt`). The
-  real hardware bus does not exist yet; the only implementations are `FlatMemory` for tests and a stopgap
-  in `main.rs` for tracing. Interrupts flow CPU-asks-bus, never bus-calls-CPU — keep it that way.
+- `src/bus.rs` — the `Bus` trait (`read`/`write`/`tick`/`pending_interrupt`/`acknowledge_interrupt`).
+  Implementations are `FlatMemory` (CPU unit tests) and `TestBus`. Interrupts flow CPU-asks-bus, never
+  bus-calls-CPU — keep it that way.
 - `src/cpu/` — the SM83 core. All 256 opcodes plus the 256-entry `CB` page decode and execute, with
   per-instruction cycle counts, plus interrupt dispatch and the HALT bug.
 - `src/interrupts.rs` — the `IF`/`IE` pair and the five sources, in priority order.
@@ -35,13 +36,20 @@ tree before assuming a subsystem exists.
   hardware actually uses, so the DIV-write and TAC-change quirks fall out rather than being special-cased.
 - `src/serial.rs` — SB/SC. No peer is attached, so transfers shift in 0xFF; its real job is capturing the
   bytes test ROMs print. External-clock transfers never complete, as on hardware.
-- `src/testbus.rs` — `TestBus`, the stopgap bus wiring cartridge ROM, WRAM, timer, serial, and interrupts
-  together. Enough for `cpu_instrs`; no PPU, no mapper, no access restrictions. Used by `--trace`,
-  `--test`, and the Blargg integration tests.
+- `src/ppu/` — the PPU. Scanline state machine, background, window, sprites, VRAM/OAM mode locking.
+  `fetch.rs` holds the rendering; `mod.rs` the timing and registers.
+- `src/testbus.rs` — `TestBus`, the stopgap bus wiring cartridge ROM, WRAM, timer, serial, PPU, OAM DMA,
+  and interrupts. Enough for `cpu_instrs` and for rendering; no mapper. Used by `--trace`, `--test`,
+  `--screenshot`, and the Blargg integration tests.
 
 `cargo run -- <rom.gb> --trace [steps]` disassembles and runs the first N instructions against the
 stopgap bus. `cargo run --release -- <rom.gb> --test` runs a ROM to completion and prints its serial
-output — use release, debug takes minutes.
+output — use release, debug takes minutes. `--screenshot [frames]` renders N frames and writes
+`screenshot.pgm` (plain-text PGM, so no image crate is needed).
+
+**Gotcha when writing test ROMs by hand:** the PPU starts with the LCD *on* (LCDC = 0x91, the post-boot
+value), so bulk VRAM writes are silently dropped during mode 3. Turn the LCD off first, as real ROMs do —
+the symptom is a uniformly blank screen with no error.
 
 Version control is **jj (Jujutsu)** colocated with git (both `.jj/` and `.git/` exist). Use `jj` commands
 (`jj st`, `jj log`, `jj diff`) rather than `git` ones. The git repo has no commits yet; history lives in jj.
@@ -102,8 +110,10 @@ Suggested order, each step ending somewhere runnable:
    functions so flag behavior can be tested without a bus.
 3. ~~**Timer and interrupts**~~ — done, plus the serial port. All 11 Blargg `cpu_instrs` ROMs and
    `instr_timing` pass.
-4. **PPU** — the mode 2/3/0/1 state machine per scanline, tile/background rendering, then sprites and
-   window. Produce a framebuffer; keep it separate from how it's displayed.
+4. ~~**PPU**~~ — done, plus OAM DMA. Mode 3 uses a fixed 172 T-cycles rather than varying with sprite
+   count and scroll, and a scanline is drawn in one go on entering HBlank instead of pixel by pixel — so
+   mid-scanline register changes are not modelled. Both are fine for games, not for Mooneye's PPU timing
+   tests.
 5. **Host frontend** — put the framebuffer on screen and wire up joypad input. Deliberately last, and
    kept behind a boundary, so the emulator core stays testable without a window.
 6. **MBC1 and beyond** — bank switching, once no-MBC games work.

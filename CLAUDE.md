@@ -45,14 +45,22 @@ steps as a plan, and verify against the actual tree before assuming a subsystem 
   emit; `keyboard_input.rs` and `game_controller.rs` are pure per-device translation to `Action`, so
   both are unit-testable with no window and no gamepad attached. Gamepads are drained once per frame
   in `about_to_wait` because gilrs keeps its own queue outside winit's event stream.
-- `src/testbus.rs` — `TestBus`, the stopgap bus wiring cartridge ROM, WRAM, timer, serial, PPU, OAM DMA,
-  and interrupts. Enough for `cpu_instrs` and for rendering; no mapper. Used by `--trace`, `--test`,
-  `--screenshot`, and the Blargg integration tests.
+- `src/cartridge/mbc.rs` — the mapper chips, behind an `Mbc` trait of four operations (ROM/RAM read and
+  write). `NoMbc` and `Mbc1` are implemented; anything else is a typed `UnsupportedMapper` error at bus
+  construction rather than a silently wrong run. `Cartridge::create_mbc` is the factory.
+- `src/testbus.rs` — `TestBus`, the stopgap bus wiring the cartridge (through its mapper), WRAM, timer,
+  serial, PPU, OAM DMA, and interrupts. Used by `--trace`, `--test`, `--mooneye`, `--screenshot`, and the
+  integration tests. I/O addresses no chip implements read **0xFF**, not RAM — see the comment on that
+  arm; backing them with RAM makes `cpu_instrs.gb` believe it is on a CGB and hang on `STOP`.
 
 `cargo run -- <rom.gb> --trace [steps]` disassembles and runs the first N instructions against the
 stopgap bus. `cargo run --release -- <rom.gb> --test` runs a ROM to completion and prints its serial
-output — use release, debug takes minutes. `--screenshot [frames]` renders N frames and writes
-`screenshot.pgm` (plain-text PGM, so no image crate is needed).
+output — use release, debug takes minutes. `--mooneye` is the same idea for Mooneye ROMs, which report a
+six-byte Fibonacci signature over serial instead of text. `--screenshot [frames]` renders N frames and
+writes `screenshot.pgm` (plain-text PGM, so no image crate is needed).
+
+Modes are parsed into one `Mode` enum and an unrecognized flag is an error. Don't reintroduce a
+fall-through to windowed play: a typo used to open a window and sit there.
 
 `--frames N` runs N frames, prints the achieved frame rate, and exits — for checking pacing without a
 human closing the window. It excludes the first frame, since window and GPU surface creation costs a few
@@ -128,23 +136,37 @@ Suggested order, each step ending somewhere runnable:
 5. ~~**Host frontend**~~ — done. winit 0.30 + pixels 0.17 + gilrs 0.11, the only dependencies, all
    host-side. Paces on the emulator's own frame completion (59.73 Hz), not the host refresh rate.
    Keyboard and gamepad are both live at once.
-6. **MBC1 and beyond** — bank switching, once no-MBC games work.
+6. ~~**MBC1**~~ — done. `src/cartridge/mbc.rs`. Not done: **MBC1M**, the multicart variant with a 4-bit
+   BANK1, which cannot be identified from the header (emulators sniff for repeated Nintendo logos), and
+   **battery-backed saves** — cartridge RAM is emulated but never written to disk, so saves die with the
+   process. `Cartridge::path` is already kept for naming a save file. MBC3 (+RTC) and MBC5 are next.
 7. **APU** — audio is genuinely the hardest to get right and the least necessary; leave it for the end.
 
 ## Testing
 
-`cargo test` runs unit tests; `cargo test --release --test blargg` runs the ROM suite (release, or it
-crawls). `tests/blargg.rs` shells out to the built binary's `--test` mode.
+`cargo test` runs unit tests; `cargo test --release` also runs the ROM suites (release, or they crawl).
+`tests/blargg.rs` and `tests/mooneye.rs` shell out to the built binary's `--test` and `--mooneye` modes.
 
-**Currently passing:** all 11 Blargg `cpu_instrs` ROMs and `instr_timing`.
+**Currently passing:** all 11 Blargg `cpu_instrs` ROMs, the combined `cpu_instrs.gb`, `instr_timing`, and
+12 of the 13 Mooneye `emulator-only/mbc1` ROMs. The exception is `multicart_rom_8Mb` (MBC1M), which is
+not implemented and is deliberately not listed as a test.
 
-The ROMs live in `test-roms/` and are **not committed** (gitignored). Fetch them from
-<https://github.com/retrio/gb-test-roms>; note the individual ROM filenames contain spaces and commas, so
-raw URLs need percent-encoding. When the ROMs are absent the tests **skip rather than fail**, so a fresh
-clone stays green — which also means a passing run proves nothing if the directory is empty.
+The ROMs live in `test-roms/` and are **not committed** (gitignored):
 
-The combined `cpu_instrs.gb` (64 KiB) only reaches test 03 before needing MBC1 banking; the 11 individual
-ROMs cover the same ground until step 6. Mooneye's timing suite is the next rung up.
+- Blargg, from <https://github.com/retrio/gb-test-roms> — `test-roms/cpu_instrs.gb`,
+  `test-roms/instr_timing.gb`, `test-roms/individual/`. The individual filenames contain spaces and
+  commas, so raw URLs need percent-encoding.
+- Mooneye, from <https://gekkio.fi/files/mooneye-test-suite/> (built ROMs; the GitHub repo has no
+  releases) — put `emulator-only/mbc1` at `test-roms/mooneye/mbc1/`.
+
+When the ROMs are absent the tests **skip rather than fail**, so a fresh clone stays green — which also
+means a passing run proves nothing if the directory is empty. Check for skip lines with
+`cargo test --release -- --nocapture` before trusting a green run.
+
+The combined `cpu_instrs.gb` (64 KiB, MBC1) is the banking regression test: the 11 individual ROMs are
+all 32 KiB and exercise no mapper at all. Two things had to be right before it passed, and only one of
+them was banking — the other was unimplemented I/O reading 0xFF. Mooneye's *timing* suite is the next
+rung up from here.
 
 Watch for: `cpu_instrs.gb` ships with a **deliberately wrong global checksum**, which is why the header
 parser records checksums rather than enforcing them.

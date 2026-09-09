@@ -124,8 +124,11 @@ impl Serial {
         }
     }
 
-    /// Everything written to the port so far.
-    #[cfg(test)]
+    /// Everything written to the port so far, as raw bytes.
+    ///
+    /// Not all test ROMs print text: Mooneye's send six binary bytes as their
+    /// pass/fail signature, so `--mooneye` needs the bytes rather than
+    /// [`Serial::output_text`]'s lossy conversion.
     pub fn output(&self) -> &[u8] {
         &self.output
     }

@@ -103,6 +103,24 @@ fn op_a_hl() {
     check("11-op a,(hl)");
 }
 
+/// The combined ROM, which is the same 11 tests packed into a 64 KiB MBC1 cartridge.
+///
+/// The individual ROMs are all 32 KiB and need no mapper, so this is the one that
+/// actually exercises bank switching: its runner switches banks to reach each test.
+#[test]
+fn cpu_instrs_combined() {
+    let rom = Path::new(env!("CARGO_MANIFEST_DIR")).join("test-roms/cpu_instrs.gb");
+    let Some(output) = run_rom(&rom) else {
+        eprintln!("skipping cpu_instrs: ROM not found");
+        return;
+    };
+    assert!(
+        output.contains("Passed"),
+        "cpu_instrs did not pass:\n{}",
+        output.trim()
+    );
+}
+
 /// Checks instruction cycle counts, which the ROM measures against the timer — so
 /// this exercises the CPU and timer together.
 #[test]

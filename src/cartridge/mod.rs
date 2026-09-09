@@ -1,10 +1,12 @@
 //! Loading cartridges from ROM files.
 //!
-//! For now a [`Cartridge`] is just the ROM image plus its parsed header. Once the
-//! memory bus exists, this is where mapper behavior (bank switching, RAM enable)
-//! will live, and the bus will reach the ROM only through this type.
+//! A [`Cartridge`] is the ROM image plus its parsed header. The bus never reads the
+//! image directly: it asks for a [`mbc::Mbc`] built from the header, and every read of
+//! cartridge ROM or RAM goes through that, since which bytes are visible depends on
+//! the mapper's registers.
 
 pub mod header;
+pub mod mbc;
 
 use std::fmt;
 use std::fs;
@@ -92,12 +94,17 @@ impl Cartridge {
         &self.path
     }
 
-    /// The raw ROM image.
+    /// Builds the mapper for this cartridge, ready to be plugged into the bus.
     ///
-    /// Temporary: once the bus exists it should go through mapper-aware reads
-    /// instead, since anything past bank 0 depends on the current bank registers.
-    pub fn rom(&self) -> &[u8] {
-        &self.rom
+    /// The ROM image is cloned because the mapper takes ownership of it: the bus wants
+    /// a mapper it can hand out `&mut` to for the length of a CPU step, and borrowing
+    /// from the `Cartridge` instead would tie that lifetime to the loader.
+    ///
+    /// Fails for mappers we have not written yet, rather than quietly running the game
+    /// with the wrong banking — which looks like a corrupted game, not a missing
+    /// feature.
+    pub fn create_mbc(&self) -> Result<Box<dyn mbc::Mbc>, mbc::UnsupportedMapper> {
+        mbc::for_cartridge(&self.header, self.rom.clone())
     }
 }
 

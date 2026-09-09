@@ -16,23 +16,67 @@ use cartridge::Cartridge;
 use cpu::Cpu;
 use testbus::TestBus;
 
+const USAGE: &str = "usage: gbemu-rs <rom.gb> [--info | --trace [steps] | --test | --mooneye \
+                     | --screenshot [frames] | --frames [n]]";
+
+/// What the binary was asked to do.
+///
+/// Parsed up front, as one value, so that an unrecognized flag is an error. The
+/// previous shape — a boolean per mode, with playing in a window as the fall-through —
+/// meant a typo silently opened a window and sat there waiting to be closed.
+enum Mode {
+    /// Play in a window, optionally exiting after a number of frames.
+    Play {
+        exit_after: Option<u64>,
+    },
+    Info,
+    Trace {
+        steps: usize,
+    },
+    Test,
+    Mooneye,
+    Screenshot {
+        frames: usize,
+    },
+}
+
+/// Decodes the mode flag and its optional numeric argument, which means something
+/// different in each mode. `Err` carries the flag we did not recognize.
+fn parse_mode(flag: Option<&str>, count: Option<usize>) -> Result<Mode, String> {
+    Ok(match flag {
+        None => Mode::Play { exit_after: None },
+        Some("--frames") => Mode::Play {
+            exit_after: Some(count.unwrap_or(60) as u64),
+        },
+        Some("--info") => Mode::Info,
+        Some("--trace") => Mode::Trace {
+            steps: count.unwrap_or(20),
+        },
+        Some("--test") => Mode::Test,
+        Some("--mooneye") => Mode::Mooneye,
+        Some("--screenshot") => Mode::Screenshot {
+            frames: count.unwrap_or(20).max(1),
+        },
+        Some(other) => return Err(other.to_string()),
+    })
+}
+
 fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
     let Some(path) = args.next() else {
-        eprintln!(
-            "usage: gbemu-rs <rom.gb> [--info | --trace [steps] | --test | --screenshot [frames]]"
-        );
+        eprintln!("{USAGE}");
         return ExitCode::FAILURE;
     };
-    let mode = args.next();
-    let trace = mode.as_deref() == Some("--trace");
-    let test = mode.as_deref() == Some("--test");
-    let screenshot = mode.as_deref() == Some("--screenshot");
-    let info = mode.as_deref() == Some("--info");
-    // The numeric argument after the mode flag; means different things per mode
-    // (trace steps, screenshot frames, frames to run before exiting).
+    let flag = args.next();
     let count: Option<usize> = args.next().and_then(|s| s.parse().ok());
-    let steps = count.unwrap_or(20);
+
+    let mode = match parse_mode(flag.as_deref(), count) {
+        Ok(mode) => mode,
+        Err(unknown) => {
+            eprintln!("error: unknown option {unknown}\n{USAGE}");
+            return ExitCode::FAILURE;
+        }
+    };
 
     let cart = match Cartridge::load(&path) {
         Ok(cart) => cart,
@@ -42,41 +86,48 @@ fn main() -> ExitCode {
         }
     };
 
-    if test {
-        return run_test_rom(&cart);
-    }
+    match mode {
+        Mode::Test => run_test_rom(&cart),
+        Mode::Mooneye => run_mooneye_rom(&cart),
+        Mode::Screenshot { frames } => write_screenshot(&cart, frames),
 
-    if screenshot {
-        // `steps` doubles as the frame count here.
-        return write_screenshot(&cart, steps.max(1));
-    }
+        Mode::Info => {
+            print!("{}", cart.header());
+            ExitCode::SUCCESS
+        }
 
-    if info || trace {
-        print!("{}", cart.header());
-        if trace {
+        Mode::Trace { steps } => {
+            print!("{}", cart.header());
             println!();
             trace_execution(&cart, steps);
+            ExitCode::SUCCESS
         }
-        return ExitCode::SUCCESS;
-    }
 
-    // With no flag, play the ROM in a window.
-    print!("{}", cart.header());
-    println!("\ncontrols: arrows = d-pad, Z = A, X = B, Enter = Start, RShift = Select");
-    println!("          P = pause, Esc = quit");
-    println!("  gamepad: d-pad or left stick, East = A, South = B, Start, Select");
-    // `--frames N` after the ROM exits after N frames, for checking pacing.
-    let exit_after = if mode.as_deref() == Some("--frames") {
-        Some(count.unwrap_or(60) as u64)
-    } else {
-        None
-    };
-    if let Err(err) = frontend::run(&cart, 4, exit_after) {
-        eprintln!("error: {err}");
-        return ExitCode::FAILURE;
+        Mode::Play { exit_after } => {
+            print!("{}", cart.header());
+            println!("\ncontrols: arrows = d-pad, Z = A, X = B, Enter = Start, RShift = Select");
+            println!("          P = pause, Esc = quit");
+            println!("  gamepad: d-pad or left stick, East = A, South = B, Start, Select");
+            if let Err(err) = frontend::run(&cart, 4, exit_after) {
+                eprintln!("error: {err}");
+                return ExitCode::FAILURE;
+            }
+            ExitCode::SUCCESS
+        }
     }
+}
 
-    ExitCode::SUCCESS
+/// Builds a bus for a cartridge, reporting an unsupported mapper rather than
+/// panicking. Every run mode needs this, and none of them can do anything useful
+/// without it.
+fn build_bus(cart: &Cartridge) -> Option<TestBus> {
+    match TestBus::new(cart) {
+        Ok(bus) => Some(bus),
+        Err(err) => {
+            eprintln!("error: {err}");
+            None
+        }
+    }
 }
 
 /// Runs a Blargg-style test ROM and reports what it printed to the serial port.
@@ -88,7 +139,9 @@ fn run_test_rom(cart: &Cartridge) -> ExitCode {
     // A generous ceiling: the whole cpu_instrs suite needs well over 100M cycles.
     const MAX_CYCLES: u64 = 300_000_000;
 
-    let mut bus = TestBus::new(cart);
+    let Some(mut bus) = build_bus(cart) else {
+        return ExitCode::FAILURE;
+    };
     let mut cpu = Cpu::new();
 
     while bus.cycles < MAX_CYCLES {
@@ -118,12 +171,55 @@ fn run_test_rom(cart: &Cartridge) -> ExitCode {
     }
 }
 
+/// Runs a Mooneye test ROM, which reports differently from Blargg's.
+///
+/// Mooneye's ROMs finish by loading the first six Fibonacci numbers into the register
+/// file and executing `LD B,B`, a no-op that acts as a debugger breakpoint. So that a
+/// harness without a debugger can still read the result, they also send those same six
+/// bytes out the serial port — 3, 5, 8, 13, 21, 34 for a pass, and six copies of 0x42
+/// for a failure. They are mostly unprintable, which is why `--test` shows a lone
+/// quote mark and calls it a failure.
+fn run_mooneye_rom(cart: &Cartridge) -> ExitCode {
+    const PASS: [u8; 6] = [3, 5, 8, 13, 21, 34];
+    const FAIL: [u8; 6] = [0x42; 6];
+    // These tests are short; anything still running after this is stuck.
+    const MAX_CYCLES: u64 = 100_000_000;
+
+    let Some(mut bus) = build_bus(cart) else {
+        return ExitCode::FAILURE;
+    };
+    let mut cpu = Cpu::new();
+
+    while bus.cycles < MAX_CYCLES && bus.serial.output().len() < PASS.len() {
+        cpu.step(&mut bus);
+    }
+
+    let signature = bus.serial.output();
+    if signature == PASS {
+        println!("Passed");
+        ExitCode::SUCCESS
+    } else if signature == FAIL {
+        println!("Failed");
+        ExitCode::FAILURE
+    } else {
+        // Neither signature: the ROM never reached its own end, so this is a hang or a
+        // crash rather than a test the hardware would call wrong.
+        println!(
+            "Inconclusive: serial said {signature:02X?} after {} cycles",
+            bus.cycles
+        );
+        ExitCode::FAILURE
+    }
+}
+
 /// Runs the ROM and prints each instruction's register state.
 ///
 /// Uses the same stopgap bus as `--test`, so what you see here is what the test
 /// runner sees.
 fn trace_execution(cart: &Cartridge, steps: usize) {
-    let mut bus = TestBus::new(cart);
+    let Some(mut bus) = build_bus(cart) else {
+        return;
+    };
     let mut cpu = Cpu::new();
 
     for _ in 0..steps {
@@ -159,7 +255,9 @@ fn trace_execution(cart: &Cartridge, steps: usize) {
 fn write_screenshot(cart: &Cartridge, frames: usize) -> ExitCode {
     use std::io::Write;
 
-    let mut bus = TestBus::new(cart);
+    let Some(mut bus) = build_bus(cart) else {
+        return ExitCode::FAILURE;
+    };
     let mut cpu = Cpu::new();
 
     let mut drawn = 0;

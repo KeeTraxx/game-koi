@@ -85,7 +85,7 @@ pub fn run(
 
     let mut app = App {
         cpu: Cpu::new(),
-        bus: TestBus::new(cart),
+        bus: TestBus::new(cart)?,
         gamepad: GameController::new(),
         window: None,
         pixels: None,

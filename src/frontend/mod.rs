@@ -1,9 +1,14 @@
-//! The host frontend: a window, a keyboard, and frame pacing.
+//! The host frontend: a window, input devices, and frame pacing.
 //!
 //! Everything here is *outside* the emulated machine. The emulator core produces a
 //! framebuffer and consumes button presses; this module is what turns those into
 //! something a person can use. Keeping the boundary sharp is why the core stays
-//! testable without a window — `--test` and `--screenshot` never touch this file.
+//! testable without a window — `--test` and `--screenshot` never touch this module.
+//!
+//! Input is split out by device: [`keyboard_input`] and [`game_controller`] each
+//! translate their own hardware into an [`Action`], and this module applies actions to
+//! the machine. Both devices are live at once — a d-pad press and an arrow key are
+//! indistinguishable by the time they reach the joypad.
 //!
 //! # Frame pacing
 //!
@@ -14,13 +19,16 @@
 //! the host's refresh rate keeps the emulated machine running at the right speed on
 //! any monitor.
 
+mod game_controller;
+mod keyboard_input;
+
 use std::time::{Duration, Instant};
 
 use pixels::{Pixels, SurfaceTexture};
 use winit::application::ApplicationHandler;
-use winit::event::{ElementState, WindowEvent};
+use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
-use winit::keyboard::{KeyCode, PhysicalKey};
+use winit::keyboard::PhysicalKey;
 use winit::window::{Window, WindowId};
 
 use crate::cartridge::Cartridge;
@@ -28,6 +36,7 @@ use crate::cpu::Cpu;
 use crate::joypad::Button;
 use crate::ppu::{SCREEN_HEIGHT, SCREEN_WIDTH};
 use crate::testbus::TestBus;
+use game_controller::GameController;
 
 /// How long one emulated frame should take on the wall clock.
 ///
@@ -46,22 +55,21 @@ const PALETTE: [[u8; 4]; 4] = [
     [0x08, 0x18, 0x20, 0xFF],
 ];
 
-/// Maps a host key to a Game Boy button.
+/// What an input device is asking the frontend to do.
 ///
-/// The d-pad on arrows and A/B on Z/X is the layout every emulator uses, so muscle
-/// memory carries over.
-fn map_key(key: KeyCode) -> Option<Button> {
-    Some(match key {
-        KeyCode::ArrowUp => Button::Up,
-        KeyCode::ArrowDown => Button::Down,
-        KeyCode::ArrowLeft => Button::Left,
-        KeyCode::ArrowRight => Button::Right,
-        KeyCode::KeyZ => Button::A,
-        KeyCode::KeyX => Button::B,
-        KeyCode::Enter => Button::Start,
-        KeyCode::ShiftRight => Button::Select,
-        _ => return None,
-    })
+/// The common vocabulary between [`keyboard_input`] and [`game_controller`]. Devices
+/// decide *what* was meant; [`App::apply`] decides what happens as a result. Presses
+/// and releases are separate variants rather than a `(Button, bool)` pair because the
+/// joypad's press path also has to raise an interrupt, and keeping them distinct makes
+/// the match arms say so.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Action {
+    Press(Button),
+    Release(Button),
+    /// Host-side controls. Not buttons the DMG had, so the emulated machine never
+    /// learns these happened.
+    TogglePause,
+    Quit,
 }
 
 /// Runs a ROM in a window until the user closes it.
@@ -78,6 +86,7 @@ pub fn run(
     let mut app = App {
         cpu: Cpu::new(),
         bus: TestBus::new(cart),
+        gamepad: GameController::new(),
         window: None,
         pixels: None,
         scale,
@@ -95,6 +104,8 @@ pub fn run(
 struct App {
     cpu: Cpu,
     bus: TestBus,
+    /// Polled once per frame rather than event-driven; see [`game_controller`].
+    gamepad: GameController,
     /// Created on `resumed` rather than up front, because some platforms refuse to
     /// make a render surface before then.
     window: Option<std::sync::Arc<Window>>,
@@ -113,6 +124,20 @@ struct App {
 }
 
 impl App {
+    /// Carries out one action, whichever device produced it.
+    ///
+    /// `event_loop` is needed only to honour [`Action::Quit`].
+    fn apply(&mut self, action: Action, event_loop: &ActiveEventLoop) {
+        match action {
+            // A press can raise the joypad interrupt, so it needs the interrupt state;
+            // a release never can, since the interrupt fires on the line going low.
+            Action::Press(button) => self.bus.joypad.press(button, &mut self.bus.interrupts),
+            Action::Release(button) => self.bus.joypad.release(button),
+            Action::TogglePause => self.paused = !self.paused,
+            Action::Quit => event_loop.exit(),
+        }
+    }
+
     /// Runs the emulator until the PPU completes a frame, then draws it.
     fn run_frame(&mut self) {
         // A safety valve: if the ROM somehow never finishes a frame, give up rather
@@ -194,32 +219,22 @@ impl ApplicationHandler for App {
             }
 
             WindowEvent::KeyboardInput { event, .. } => {
+                // Physical key, not the logical one: bindings follow the position of
+                // the key on the board, so a Dvorak or AZERTY layout does not move the
+                // d-pad out from under the player's hand.
                 let PhysicalKey::Code(code) = event.physical_key else {
                     return;
                 };
 
-                // Host-side controls, which the emulated machine never sees.
-                if event.state == ElementState::Pressed {
-                    match code {
-                        KeyCode::Escape => {
-                            event_loop.exit();
-                            return;
-                        }
-                        KeyCode::KeyP => {
-                            self.paused = !self.paused;
-                            return;
-                        }
-                        _ => {}
-                    }
+                // The OS's auto-repeat is a typing feature and says nothing about the
+                // switch: the key is simply still down, which we already know. Passing
+                // repeats through would make holding P flap the pause state.
+                if event.repeat {
+                    return;
                 }
 
-                if let Some(button) = map_key(code) {
-                    match event.state {
-                        ElementState::Pressed => {
-                            self.bus.joypad.press(button, &mut self.bus.interrupts)
-                        }
-                        ElementState::Released => self.bus.joypad.release(button),
-                    }
+                if let Some(action) = keyboard_input::action_for(code, event.state) {
+                    self.apply(action, event_loop);
                 }
             }
 
@@ -236,7 +251,14 @@ impl ApplicationHandler for App {
         }
     }
 
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // Gamepads are outside winit's event stream, so this is where they get read.
+        // Before the sleep, not after: input gathered now is what the frame we are
+        // about to run will see.
+        for action in self.gamepad.poll() {
+            self.apply(action, event_loop);
+        }
+
         // Sleep until the frame is due, then run it in this same callback. Sleeping
         // and returning instead would cost an extra event-loop round trip per frame,
         // which is enough to drag the rate well below the hardware's 59.73 Hz.
@@ -265,7 +287,7 @@ impl ApplicationHandler for App {
                     "{counted} frames in {elapsed:.2}s = {:.2} fps (excluding startup)",
                     counted / elapsed
                 );
-                _event_loop.exit();
+                event_loop.exit();
                 return;
             }
         }
@@ -288,35 +310,25 @@ impl ApplicationHandler for App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use winit::event::ElementState;
+    use winit::keyboard::KeyCode;
 
     #[test]
     fn frame_time_matches_the_hardware_refresh_rate() {
         // 70224 T-cycles at 4194304 Hz is ~59.73 Hz, not 60.
         let seconds = FRAME_TIME.as_secs_f64();
         let hz = 1.0 / seconds;
-        assert!(
-            (hz - 59.727).abs() < 0.01,
-            "expected ~59.73 Hz, got {hz}"
-        );
+        assert!((hz - 59.727).abs() < 0.01, "expected ~59.73 Hz, got {hz}");
     }
 
     #[test]
-    fn key_mapping_covers_all_eight_buttons() {
-        let keys = [
-            KeyCode::ArrowUp,
-            KeyCode::ArrowDown,
-            KeyCode::ArrowLeft,
-            KeyCode::ArrowRight,
-            KeyCode::KeyZ,
-            KeyCode::KeyX,
-            KeyCode::Enter,
-            KeyCode::ShiftRight,
-        ];
-        let mapped: Vec<Button> = keys.into_iter().filter_map(map_key).collect();
-        assert_eq!(mapped.len(), 8, "every button has a key");
-
-        // Unbound keys map to nothing rather than a default button.
-        assert!(map_key(KeyCode::KeyQ).is_none());
+    fn keyboard_and_gamepad_agree_on_the_same_buttons() {
+        // The two devices are separate modules; this is the seam that keeps them
+        // interchangeable — a gamepad press must be the same Action as a key press.
+        assert_eq!(
+            keyboard_input::action_for(KeyCode::ArrowUp, ElementState::Pressed),
+            Some(Action::Press(Button::Up))
+        );
     }
 
     #[test]

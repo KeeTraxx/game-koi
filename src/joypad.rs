@@ -42,7 +42,10 @@ impl Button {
     }
 
     fn is_direction(self) -> bool {
-        matches!(self, Button::Right | Button::Left | Button::Up | Button::Down)
+        matches!(
+            self,
+            Button::Right | Button::Left | Button::Up | Button::Down
+        )
     }
 }
 

@@ -19,7 +19,9 @@ use testbus::TestBus;
 fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
     let Some(path) = args.next() else {
-        eprintln!("usage: gbemu-rs <rom.gb> [--info | --trace [steps] | --test | --screenshot [frames]]");
+        eprintln!(
+            "usage: gbemu-rs <rom.gb> [--info | --trace [steps] | --test | --screenshot [frames]]"
+        );
         return ExitCode::FAILURE;
     };
     let mode = args.next();
@@ -62,6 +64,7 @@ fn main() -> ExitCode {
     print!("{}", cart.header());
     println!("\ncontrols: arrows = d-pad, Z = A, X = B, Enter = Start, RShift = Select");
     println!("          P = pause, Esc = quit");
+    println!("  gamepad: d-pad or left stick, East = A, South = B, Start, Select");
     // `--frames N` after the ROM exits after N frames, for checking pacing.
     let exit_after = if mode.as_deref() == Some("--frames") {
         Some(count.unwrap_or(60) as u64)

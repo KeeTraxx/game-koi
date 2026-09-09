@@ -39,9 +39,12 @@ steps as a plan, and verify against the actual tree before assuming a subsystem 
   `fetch.rs` holds the rendering; `mod.rs` the timing and registers.
 - `src/joypad.rs` — P1. All the active-low inversion lives here; the public API is plain
   `press`/`release`. Selecting a button group means writing its select bit **low**.
-- `src/frontend.rs` — window, keyboard, frame pacing (winit + pixels). The only module outside the
+- `src/frontend/` — window, input, frame pacing (winit + pixels + gilrs). The only module outside the
   emulated machine; the core never depends on it, which is what keeps `--test` and `--screenshot`
-  headless.
+  headless. `mod.rs` holds the window, the palette, pacing, and the `Action` enum both input devices
+  emit; `keyboard_input.rs` and `game_controller.rs` are pure per-device translation to `Action`, so
+  both are unit-testable with no window and no gamepad attached. Gamepads are drained once per frame
+  in `about_to_wait` because gilrs keeps its own queue outside winit's event stream.
 - `src/testbus.rs` — `TestBus`, the stopgap bus wiring cartridge ROM, WRAM, timer, serial, PPU, OAM DMA,
   and interrupts. Enough for `cpu_instrs` and for rendering; no mapper. Used by `--trace`, `--test`,
   `--screenshot`, and the Blargg integration tests.
@@ -122,8 +125,9 @@ Suggested order, each step ending somewhere runnable:
    count and scroll, and a scanline is drawn in one go on entering HBlank instead of pixel by pixel — so
    mid-scanline register changes are not modelled. Both are fine for games, not for Mooneye's PPU timing
    tests.
-5. ~~**Host frontend**~~ — done. winit 0.30 + pixels 0.17, the only dependencies. Paces on the
-   emulator's own frame completion (59.73 Hz), not the host refresh rate.
+5. ~~**Host frontend**~~ — done. winit 0.30 + pixels 0.17 + gilrs 0.11, the only dependencies, all
+   host-side. Paces on the emulator's own frame completion (59.73 Hz), not the host refresh rate.
+   Keyboard and gamepad are both live at once.
 6. **MBC1 and beyond** — bank switching, once no-MBC games work.
 7. **APU** — audio is genuinely the hardest to get right and the least necessary; leave it for the end.
 

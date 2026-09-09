@@ -11,6 +11,7 @@
 use crate::bus::Bus;
 use crate::cartridge::Cartridge;
 use crate::interrupts::{Interrupt, InterruptState};
+use crate::joypad::Joypad;
 use crate::ppu::Ppu;
 use crate::serial::Serial;
 use crate::timer::Timer;
@@ -22,6 +23,7 @@ pub struct TestBus {
     pub timer: Timer,
     pub serial: Serial,
     pub ppu: Ppu,
+    pub joypad: Joypad,
     pub interrupts: InterruptState,
     pub cycles: u64,
     /// OAM DMA state: the source page and how many bytes are left to copy.
@@ -41,6 +43,7 @@ impl TestBus {
             timer: Timer::new(),
             serial: Serial::new(),
             ppu: Ppu::new(),
+            joypad: Joypad::new(),
             interrupts: InterruptState::default(),
             cycles: 0,
             dma_source: 0,
@@ -77,6 +80,7 @@ impl Bus for TestBus {
             0x0000..=0x7FFF => self.rom.get(address as usize).copied().unwrap_or(0xFF),
             0x8000..=0x9FFF => self.ppu.read_vram(address),
             0xFE00..=0xFE9F => self.ppu.read_oam(address),
+            0xFF00 => self.joypad.read(),
             0xFF01..=0xFF02 => self.serial.read(address),
             0xFF04..=0xFF07 => self.timer.read(address),
             0xFF0F => self.interrupts.read_if(),
@@ -93,6 +97,7 @@ impl Bus for TestBus {
             0x0000..=0x7FFF => {}
             0x8000..=0x9FFF => self.ppu.write_vram(address, value),
             0xFE00..=0xFE9F => self.ppu.write_oam(address, value),
+            0xFF00 => self.joypad.write(value),
             0xFF01..=0xFF02 => self.serial.write(address, value),
             0xFF04..=0xFF07 => self.timer.write(address, value),
             0xFF0F => self.interrupts.write_if(value),

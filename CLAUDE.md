@@ -20,10 +20,9 @@ This shapes how to work in this repo:
 
 ## State of the repo
 
-Steps 1-4 of the build order below are done; steps 5-7 are not started. `[dependencies]` is still empty:
-frames are rendered into a framebuffer but there is no window, so the only way to see output is
-`--screenshot`. Treat the unfinished steps as a plan, and verify against the actual tree before assuming
-a subsystem exists.
+Steps 1-5 of the build order below are done; steps 6-7 are not started. The emulator opens a window and
+is playable, but only for 32 KiB no-MBC ROMs — most commercial games need step 6. Treat the unfinished
+steps as a plan, and verify against the actual tree before assuming a subsystem exists.
 
 - `src/cartridge/` — ROM loading and header parsing. No mapper support yet: only 32 KiB no-MBC ROMs.
 - `src/bus.rs` — the `Bus` trait (`read`/`write`/`tick`/`pending_interrupt`/`acknowledge_interrupt`).
@@ -38,6 +37,11 @@ a subsystem exists.
   bytes test ROMs print. External-clock transfers never complete, as on hardware.
 - `src/ppu/` — the PPU. Scanline state machine, background, window, sprites, VRAM/OAM mode locking.
   `fetch.rs` holds the rendering; `mod.rs` the timing and registers.
+- `src/joypad.rs` — P1. All the active-low inversion lives here; the public API is plain
+  `press`/`release`. Selecting a button group means writing its select bit **low**.
+- `src/frontend.rs` — window, keyboard, frame pacing (winit + pixels). The only module outside the
+  emulated machine; the core never depends on it, which is what keeps `--test` and `--screenshot`
+  headless.
 - `src/testbus.rs` — `TestBus`, the stopgap bus wiring cartridge ROM, WRAM, timer, serial, PPU, OAM DMA,
   and interrupts. Enough for `cpu_instrs` and for rendering; no mapper. Used by `--trace`, `--test`,
   `--screenshot`, and the Blargg integration tests.
@@ -46,6 +50,10 @@ a subsystem exists.
 stopgap bus. `cargo run --release -- <rom.gb> --test` runs a ROM to completion and prints its serial
 output — use release, debug takes minutes. `--screenshot [frames]` renders N frames and writes
 `screenshot.pgm` (plain-text PGM, so no image crate is needed).
+
+`--frames N` runs N frames, prints the achieved frame rate, and exits — for checking pacing without a
+human closing the window. It excludes the first frame, since window and GPU surface creation costs a few
+hundred milliseconds and averaging that into a short run makes the rate look much worse than it is.
 
 **Gotcha when writing test ROMs by hand:** the PPU starts with the LCD *on* (LCDC = 0x91, the post-boot
 value), so bulk VRAM writes are silently dropped during mode 3. Turn the LCD off first, as real ROMs do —
@@ -59,7 +67,7 @@ Version control is **jj (Jujutsu)** colocated with git (both `.jj/` and `.git/` 
 Rust 1.95, edition 2024.
 
 ```
-cargo run -- <rom.gb>       # run the emulator against a ROM
+cargo run --release -- <rom.gb>   # play a ROM in a window
 cargo build --release       # release build (needed for real-time speed; debug is far too slow)
 cargo test                  # all tests
 cargo test <substring>      # tests whose name contains <substring>
@@ -114,8 +122,8 @@ Suggested order, each step ending somewhere runnable:
    count and scroll, and a scanline is drawn in one go on entering HBlank instead of pixel by pixel — so
    mid-scanline register changes are not modelled. Both are fine for games, not for Mooneye's PPU timing
    tests.
-5. **Host frontend** — put the framebuffer on screen and wire up joypad input. Deliberately last, and
-   kept behind a boundary, so the emulator core stays testable without a window.
+5. ~~**Host frontend**~~ — done. winit 0.30 + pixels 0.17, the only dependencies. Paces on the
+   emulator's own frame completion (59.73 Hz), not the host refresh rate.
 6. **MBC1 and beyond** — bank switching, once no-MBC games work.
 7. **APU** — audio is genuinely the hardest to get right and the least necessary; leave it for the end.
 

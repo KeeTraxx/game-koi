@@ -1,7 +1,9 @@
 mod bus;
 mod cartridge;
 mod cpu;
+mod frontend;
 mod interrupts;
+mod joypad;
 mod ppu;
 mod serial;
 mod testbus;
@@ -17,14 +19,18 @@ use testbus::TestBus;
 fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
     let Some(path) = args.next() else {
-        eprintln!("usage: gbemu-rs <rom.gb> [--trace [steps] | --test | --screenshot [frames]]");
+        eprintln!("usage: gbemu-rs <rom.gb> [--info | --trace [steps] | --test | --screenshot [frames]]");
         return ExitCode::FAILURE;
     };
     let mode = args.next();
     let trace = mode.as_deref() == Some("--trace");
     let test = mode.as_deref() == Some("--test");
     let screenshot = mode.as_deref() == Some("--screenshot");
-    let steps: usize = args.next().and_then(|s| s.parse().ok()).unwrap_or(20);
+    let info = mode.as_deref() == Some("--info");
+    // The numeric argument after the mode flag; means different things per mode
+    // (trace steps, screenshot frames, frames to run before exiting).
+    let count: Option<usize> = args.next().and_then(|s| s.parse().ok());
+    let steps = count.unwrap_or(20);
 
     let cart = match Cartridge::load(&path) {
         Ok(cart) => cart,
@@ -43,11 +49,28 @@ fn main() -> ExitCode {
         return write_screenshot(&cart, steps.max(1));
     }
 
-    print!("{}", cart.header());
+    if info || trace {
+        print!("{}", cart.header());
+        if trace {
+            println!();
+            trace_execution(&cart, steps);
+        }
+        return ExitCode::SUCCESS;
+    }
 
-    if trace {
-        println!();
-        trace_execution(&cart, steps);
+    // With no flag, play the ROM in a window.
+    print!("{}", cart.header());
+    println!("\ncontrols: arrows = d-pad, Z = A, X = B, Enter = Start, RShift = Select");
+    println!("          P = pause, Esc = quit");
+    // `--frames N` after the ROM exits after N frames, for checking pacing.
+    let exit_after = if mode.as_deref() == Some("--frames") {
+        Some(count.unwrap_or(60) as u64)
+    } else {
+        None
+    };
+    if let Err(err) = frontend::run(&cart, 4, exit_after) {
+        eprintln!("error: {err}");
+        return ExitCode::FAILURE;
     }
 
     ExitCode::SUCCESS

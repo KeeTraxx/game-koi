@@ -20,20 +20,28 @@ This shapes how to work in this repo:
 
 ## State of the repo
 
-Steps 1 and 2 of the build order below are done; steps 3-7 are not started. `[dependencies]` is still
+Steps 1-3 of the build order below are done; steps 4-7 are not started. `[dependencies]` is still
 empty and nothing draws to a screen. Treat the unfinished steps as a plan, and verify against the actual
 tree before assuming a subsystem exists.
 
 - `src/cartridge/` — ROM loading and header parsing. No mapper support yet: only 32 KiB no-MBC ROMs.
-- `src/bus.rs` — the `Bus` trait (`read`/`write`/`tick`). The real hardware bus does not exist yet; the
-  only implementations are `FlatMemory` for tests and a stopgap in `main.rs` for tracing.
+- `src/bus.rs` — the `Bus` trait (`read`/`write`/`tick`/`pending_interrupt`/`acknowledge_interrupt`). The
+  real hardware bus does not exist yet; the only implementations are `FlatMemory` for tests and a stopgap
+  in `main.rs` for tracing. Interrupts flow CPU-asks-bus, never bus-calls-CPU — keep it that way.
 - `src/cpu/` — the SM83 core. All 256 opcodes plus the 256-entry `CB` page decode and execute, with
-  per-instruction cycle counts. Interrupt *dispatch* is not implemented: `IME`, `DI`, `EI`, and `RETI`
-  maintain the flag, but nothing checks `IE`/`IF` or jumps to a handler yet — that arrives with step 3,
-  and until then a halted CPU never wakes.
+  per-instruction cycle counts, plus interrupt dispatch and the HALT bug.
+- `src/interrupts.rs` — the `IF`/`IE` pair and the five sources, in priority order.
+- `src/timer.rs` — DIV/TIMA/TMA/TAC, built on the 16-bit counter and falling-edge detector that the
+  hardware actually uses, so the DIV-write and TAC-change quirks fall out rather than being special-cased.
+- `src/serial.rs` — SB/SC. No peer is attached, so transfers shift in 0xFF; its real job is capturing the
+  bytes test ROMs print. External-clock transfers never complete, as on hardware.
+- `src/testbus.rs` — `TestBus`, the stopgap bus wiring cartridge ROM, WRAM, timer, serial, and interrupts
+  together. Enough for `cpu_instrs`; no PPU, no mapper, no access restrictions. Used by `--trace`,
+  `--test`, and the Blargg integration tests.
 
-`cargo run -- <rom.gb> --trace [steps]` disassembles and runs the first N instructions of a ROM against
-the stopgap bus. Useful for eyeballing CPU behavior against a known disassembly.
+`cargo run -- <rom.gb> --trace [steps]` disassembles and runs the first N instructions against the
+stopgap bus. `cargo run --release -- <rom.gb> --test` runs a ROM to completion and prints its serial
+output — use release, debug takes minutes.
 
 Version control is **jj (Jujutsu)** colocated with git (both `.jj/` and `.git/` exist). Use `jj` commands
 (`jj st`, `jj log`, `jj diff`) rather than `git` ones. The git repo has no commits yet; history lives in jj.
@@ -92,8 +100,8 @@ Suggested order, each step ending somewhere runnable:
 2. ~~**CPU + bus skeleton**~~ — done. Decoding is by bit-pattern (`xxyyyzzz`) rather than a 500-arm match;
    see the module docs in `src/cpu/mod.rs` for the scheme. The ALU lives in `src/cpu/alu.rs` as pure
    functions so flag behavior can be tested without a bus.
-3. **Timer and interrupts** — `DIV`/`TIMA`/`TMA`/`TAC`, the `IE`/`IF` pair, and the interrupt dispatch
-   sequence. This is what makes test ROMs able to report results.
+3. ~~**Timer and interrupts**~~ — done, plus the serial port. All 11 Blargg `cpu_instrs` ROMs and
+   `instr_timing` pass.
 4. **PPU** — the mode 2/3/0/1 state machine per scanline, tile/background rendering, then sprites and
    window. Produce a framebuffer; keep it separate from how it's displayed.
 5. **Host frontend** — put the framebuffer on screen and wire up joypad input. Deliberately last, and
@@ -103,13 +111,21 @@ Suggested order, each step ending somewhere runnable:
 
 ## Testing
 
-The standard approach for this domain, worth adopting early: run the community test ROMs (Blargg's
-`cpu_instrs` and `instr_timing`, later Mooneye's timing suite) as automated tests. They execute on the
-emulator itself and report pass/fail — via the serial port, which is why a stub serial output that
-collects written bytes into a string is worth having as soon as the CPU runs.
+`cargo test` runs unit tests; `cargo test --release --test blargg` runs the ROM suite (release, or it
+crawls). `tests/blargg.rs` shells out to the built binary's `--test` mode.
 
-Blargg's `cpu_instrs` split into its 11 individual ROMs makes a good incremental target: each one passing
-is a real checkpoint. Test ROM binaries should not be committed — fetch them into an ignored directory.
+**Currently passing:** all 11 Blargg `cpu_instrs` ROMs and `instr_timing`.
+
+The ROMs live in `test-roms/` and are **not committed** (gitignored). Fetch them from
+<https://github.com/retrio/gb-test-roms>; note the individual ROM filenames contain spaces and commas, so
+raw URLs need percent-encoding. When the ROMs are absent the tests **skip rather than fail**, so a fresh
+clone stays green — which also means a passing run proves nothing if the directory is empty.
+
+The combined `cpu_instrs.gb` (64 KiB) only reaches test 03 before needing MBC1 banking; the 11 individual
+ROMs cover the same ground until step 6. Mooneye's timing suite is the next rung up.
+
+Watch for: `cpu_instrs.gb` ships with a **deliberately wrong global checksum**, which is why the header
+parser records checksums rather than enforcing them.
 
 Unit-test the fiddly, self-contained pieces directly: flag computation for `ADC`/`SBC`/`DAA`, the
 half-carry cases, MBC bank-number masking, and memory-map decode boundaries.

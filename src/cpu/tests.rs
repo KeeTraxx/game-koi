@@ -547,3 +547,266 @@ fn documented_cycle_counts_match() {
         );
     }
 }
+
+// --- Interrupt dispatch ---
+
+use crate::interrupts::Interrupt;
+
+/// Arms an interrupt as both requested and enabled.
+fn request(bus: &mut FlatMemory, interrupt: Interrupt) {
+    bus.interrupts.enabled |= interrupt.mask();
+    bus.interrupts.request(interrupt);
+}
+
+#[test]
+fn dispatch_calls_the_handler_and_clears_ime() {
+    let mut cpu = Cpu::new();
+    let mut bus = FlatMemory::new();
+    bus.load(0x0100, &[0x00, 0x00]);
+    cpu.ime = true;
+    request(&mut bus, Interrupt::Timer);
+
+    cpu.step(&mut bus);
+
+    assert_eq!(cpu.regs.pc, 0x0050, "jumped to the timer handler");
+    assert!(!cpu.ime, "IME is cleared so the handler is not re-entered");
+    assert_eq!(
+        bus.interrupts.requested & Interrupt::Timer.mask(),
+        0,
+        "the IF bit is cleared by the CPU, not the handler"
+    );
+    // The return address was pushed, so RETI can get back.
+    assert_eq!(cpu.regs.sp, 0xFFFC);
+    assert_eq!(bus.memory[0xFFFC], 0x00);
+    assert_eq!(bus.memory[0xFFFD], 0x01);
+    assert_eq!(bus.cycles, 5, "dispatch takes 5 M-cycles");
+}
+
+#[test]
+fn dispatch_does_not_happen_while_ime_is_off() {
+    let mut cpu = Cpu::new();
+    let mut bus = FlatMemory::new();
+    bus.load(0x0100, &[0x00]);
+    cpu.ime = false;
+    request(&mut bus, Interrupt::Timer);
+
+    cpu.step(&mut bus);
+    assert_eq!(cpu.regs.pc, 0x0101, "the NOP ran instead");
+    assert_ne!(bus.interrupts.requested, 0, "the request is still pending");
+}
+
+#[test]
+fn dispatch_respects_priority() {
+    let mut cpu = Cpu::new();
+    let mut bus = FlatMemory::new();
+    cpu.ime = true;
+    request(&mut bus, Interrupt::Joypad);
+    request(&mut bus, Interrupt::VBlank);
+
+    cpu.step(&mut bus);
+    assert_eq!(cpu.regs.pc, 0x0040, "VBlank outranks Joypad");
+    // Joypad is untouched and will be serviced next.
+    assert_ne!(bus.interrupts.requested & Interrupt::Joypad.mask(), 0);
+}
+
+#[test]
+fn a_pending_interrupt_wakes_a_halted_cpu() {
+    let mut cpu = Cpu::new();
+    let mut bus = FlatMemory::new();
+    bus.load(0x0100, &[0x76, 0x00]); // HALT; NOP
+    cpu.ime = true;
+
+    cpu.step(&mut bus);
+    assert_eq!(cpu.state, State::Halted);
+
+    // Nothing pending: it stays halted.
+    cpu.step(&mut bus);
+    assert_eq!(cpu.state, State::Halted);
+
+    request(&mut bus, Interrupt::Timer);
+    cpu.step(&mut bus);
+    assert_eq!(cpu.state, State::Running, "the interrupt woke it");
+    assert_eq!(cpu.regs.pc, 0x0050, "and was dispatched");
+}
+
+#[test]
+fn halt_wakes_even_when_ime_is_off() {
+    // Waking and dispatching are separate questions: IME gates only the dispatch.
+    let mut cpu = Cpu::new();
+    let mut bus = FlatMemory::new();
+    bus.load(0x0100, &[0x76, 0x3C]); // HALT; INC A
+    cpu.ime = false;
+    cpu.regs.a = 0x00;
+
+    cpu.step(&mut bus);
+    assert_eq!(cpu.state, State::Halted);
+
+    request(&mut bus, Interrupt::Timer);
+    cpu.step(&mut bus); // The wake itself consumes this step.
+    assert_eq!(cpu.state, State::Running);
+    assert_eq!(cpu.regs.pc, 0x0101, "resumed inline, no handler jump");
+    assert_ne!(bus.interrupts.requested, 0, "IF is untouched with IME off");
+
+    cpu.step(&mut bus); // Now the instruction after HALT runs, exactly once.
+    assert_eq!(cpu.regs.a, 1);
+    assert_eq!(cpu.regs.pc, 0x0102);
+}
+
+#[test]
+fn halt_bug_executes_the_next_byte_twice() {
+    // IME off with an interrupt already pending: HALT does not halt, and the
+    // following byte is executed twice because PC fails to advance once.
+    let mut cpu = Cpu::new();
+    let mut bus = FlatMemory::new();
+    bus.load(0x0100, &[0x76, 0x3C, 0x00]); // HALT; INC A; NOP
+    cpu.ime = false;
+    cpu.regs.a = 0x00;
+    request(&mut bus, Interrupt::Timer);
+
+    cpu.step(&mut bus); // HALT: triggers the bug rather than halting.
+    assert_eq!(cpu.state, State::Running, "the bug means it never halts");
+
+    cpu.step(&mut bus); // INC A, but PC does not advance.
+    assert_eq!(cpu.regs.a, 1);
+    assert_eq!(cpu.regs.pc, 0x0101, "PC stuck on the INC");
+
+    cpu.step(&mut bus); // The same INC A runs again.
+    assert_eq!(cpu.regs.a, 2, "the byte after HALT executed twice");
+    assert_eq!(cpu.regs.pc, 0x0102);
+}
+
+#[test]
+fn ei_then_halt_dispatches_normally() {
+    // With IME on, HALT behaves properly and no bug is triggered.
+    let mut cpu = Cpu::new();
+    let mut bus = FlatMemory::new();
+    bus.load(0x0100, &[0x76, 0x3C]);
+    cpu.ime = true;
+    request(&mut bus, Interrupt::Timer);
+
+    cpu.step(&mut bus);
+    assert_eq!(cpu.regs.pc, 0x0050, "dispatched instead of halting");
+}
+
+#[test]
+fn handler_returns_with_reti_and_restores_ime() {
+    let mut cpu = Cpu::new();
+    let mut bus = FlatMemory::new();
+    bus.load(0x0100, &[0x00, 0x3C]); // NOP; INC A
+    bus.load(0x0050, &[0xD9]); // handler: RETI
+    cpu.ime = true;
+    request(&mut bus, Interrupt::Timer);
+
+    cpu.step(&mut bus); // dispatch
+    assert_eq!(cpu.regs.pc, 0x0050);
+    assert!(!cpu.ime);
+
+    cpu.step(&mut bus); // RETI
+    assert_eq!(cpu.regs.pc, 0x0100, "returned to where we were interrupted");
+    assert!(cpu.ime, "RETI restored IME");
+    assert_eq!(cpu.regs.sp, 0xFFFE, "stack balanced");
+}
+
+#[test]
+fn dispatch_waits_until_the_current_instruction_finishes() {
+    // The interrupt arrives while a multi-cycle instruction is mid-flight; it must
+    // not be serviced until that instruction completes.
+    let mut cpu = Cpu::new();
+    let mut bus = FlatMemory::new();
+    bus.load(0x0100, &[0x01, 0x34, 0x12, 0x00]); // LD BC, 0x1234; NOP
+    cpu.ime = true;
+    request(&mut bus, Interrupt::Timer);
+
+    cpu.step(&mut bus);
+    // The dispatch happens first, before LD BC even starts.
+    assert_eq!(cpu.regs.pc, 0x0050);
+    assert_eq!(cpu.regs.get16(Reg16::BC), 0x0013, "LD BC has not run yet");
+}
+
+/// End-to-end: a real timer driving a real handler through the CPU.
+///
+/// This is the first test where all three of step 3's pieces run together — the
+/// timer overflows, sets its `IF` bit, the CPU dispatches to 0x0050, the handler
+/// runs, and `RETI` returns to the interrupted loop with IME restored.
+#[test]
+fn timer_interrupt_drives_a_handler() {
+    use crate::interrupts::InterruptState;
+    use crate::timer::Timer;
+
+    /// A bus with a working timer, unlike the inert `FlatMemory`.
+    struct TimedBus {
+        memory: Vec<u8>,
+        timer: Timer,
+        interrupts: InterruptState,
+    }
+
+    impl Bus for TimedBus {
+        fn read(&mut self, address: u16) -> u8 {
+            match address {
+                0xFF04..=0xFF07 => self.timer.read(address),
+                0xFF0F => self.interrupts.read_if(),
+                0xFFFF => self.interrupts.enabled,
+                _ => self.memory[address as usize],
+            }
+        }
+
+        fn write(&mut self, address: u16, value: u8) {
+            match address {
+                0xFF04..=0xFF07 => self.timer.write(address, value),
+                0xFF0F => self.interrupts.write_if(value),
+                0xFFFF => self.interrupts.enabled = value,
+                _ => self.memory[address as usize] = value,
+            }
+        }
+
+        fn tick(&mut self) {
+            self.timer.tick(&mut self.interrupts);
+        }
+
+        fn pending_interrupt(&self) -> Option<Interrupt> {
+            self.interrupts.pending()
+        }
+
+        fn acknowledge_interrupt(&mut self, interrupt: Interrupt) {
+            self.interrupts.acknowledge(interrupt);
+        }
+    }
+
+    let mut bus = TimedBus {
+        memory: vec![0; 0x1_0000],
+        timer: Timer::new(),
+        interrupts: InterruptState::default(),
+    };
+
+    // Main loop: enable the timer interrupt, start the fastest timer, EI, spin.
+    bus.memory[0x0100..0x010D].copy_from_slice(&[
+        0x3E, 0x04, // LD A, 0x04
+        0xE0, 0xFF, // LDH (0xFF), A   -> IE = timer
+        0x3E, 0x05, // LD A, 0x05
+        0xE0, 0x07, // LDH (0x07), A   -> TAC = enabled, fastest
+        0xFB, // EI
+        0x00, 0x00, // NOP; NOP
+        0x18, 0xFC, // JR -4
+    ]);
+    // Handler at the timer vector: count invocations in B, then return.
+    bus.memory[0x0050..0x0052].copy_from_slice(&[0x04, 0xD9]); // INC B; RETI
+
+    let mut cpu = Cpu::new();
+    for _ in 0..4000 {
+        cpu.step(&mut bus);
+    }
+
+    assert!(
+        cpu.regs.b >= 3,
+        "handler should have run several times, B = {}",
+        cpu.regs.b
+    );
+    assert!(cpu.ime, "RETI left interrupts enabled");
+    assert_eq!(cpu.regs.sp, 0xFFFE, "every dispatch was matched by a RETI");
+    // Execution ended back in the spin loop, not stranded in the handler.
+    assert!(
+        (0x0109..=0x010D).contains(&cpu.regs.pc),
+        "PC = {:#06X} is outside the main loop",
+        cpu.regs.pc
+    );
+}

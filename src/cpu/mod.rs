@@ -35,6 +35,7 @@ pub mod alu;
 pub mod registers;
 
 use crate::bus::Bus;
+use crate::interrupts::Interrupt;
 use registers::{Flags, Reg8, Reg16, Registers};
 
 /// Where an 8-bit instruction operand lives.
@@ -112,6 +113,8 @@ pub struct Cpu {
     /// EI enables interrupts only *after* the following instruction, so a common
     /// `EI; RET` idiom returns before the handler can fire. This defers it one step.
     ime_pending: bool,
+    /// Set when the HALT bug has been triggered; makes the next fetch not advance PC.
+    halt_bug: bool,
 }
 
 impl Cpu {
@@ -122,6 +125,7 @@ impl Cpu {
             state: State::Running,
             ime: false,
             ime_pending: false,
+            halt_bug: false,
         }
     }
 
@@ -134,6 +138,28 @@ impl Cpu {
         // EI's effect lands after the next instruction, so latch the request now and
         // apply it once this instruction has run.
         let enabling_ime = self.ime_pending;
+
+        // A pending interrupt wakes a halted CPU whether or not IME is set. Only the
+        // *dispatch* below needs IME; waking does not.
+        //
+        // Waking costs the cycle this step would have spent halted, so with IME off
+        // the CPU resumes at the instruction *after* HALT on the following step
+        // rather than executing it here.
+        if self.state == State::Halted && bus.pending_interrupt().is_some() {
+            self.state = State::Running;
+            if !self.ime {
+                bus.tick();
+                return;
+            }
+        }
+
+        // Dispatch happens between instructions, never in the middle of one.
+        if self.ime
+            && let Some(interrupt) = bus.pending_interrupt()
+        {
+            self.dispatch(bus, interrupt);
+            return;
+        }
 
         match self.state {
             State::Running => {
@@ -149,6 +175,26 @@ impl Cpu {
         }
     }
 
+    /// Services an interrupt: 5 M-cycles, and it behaves like a hardware-injected
+    /// `CALL` to the handler address.
+    ///
+    /// IME is cleared so the handler is not immediately re-entered; the handler ends
+    /// with `RETI` to restore it. The `IF` bit is cleared here rather than by the
+    /// handler, which is why a handler that never touches `IF` still works.
+    fn dispatch(&mut self, bus: &mut impl Bus, interrupt: Interrupt) {
+        self.ime = false;
+        self.ime_pending = false;
+        bus.acknowledge_interrupt(interrupt);
+
+        // Two idle cycles, then the push (2) and the jump (1).
+        bus.tick();
+        bus.tick();
+        let pc = self.regs.pc;
+        self.push16(bus, pc);
+        bus.tick();
+        self.regs.pc = interrupt.handler();
+    }
+
     // --- Memory helpers. Each access is one M-cycle. ---
 
     fn read8(&mut self, bus: &mut impl Bus, address: u16) -> u8 {
@@ -162,9 +208,16 @@ impl Cpu {
     }
 
     /// Reads the byte at PC and advances past it.
+    ///
+    /// Except when the HALT bug is armed: then PC stays put for one fetch, so the
+    /// byte after HALT is read twice.
     fn fetch8(&mut self, bus: &mut impl Bus) -> u8 {
         let value = self.read8(bus, self.regs.pc);
-        self.regs.pc = self.regs.pc.wrapping_add(1);
+        if self.halt_bug {
+            self.halt_bug = false;
+        } else {
+            self.regs.pc = self.regs.pc.wrapping_add(1);
+        }
         value
     }
 
@@ -247,7 +300,7 @@ impl Cpu {
             // --- x=1: LD r, r' — the whole 8-bit register-to-register block ---
             // 0x76 would be LD (HL), (HL), which is meaningless; the hardware uses
             // that slot for HALT.
-            (1, _) if opcode == 0x76 => self.halt(),
+            (1, _) if opcode == 0x76 => self.halt(bus),
             (1, _) => {
                 let value = self.read_operand(bus, Operand8::from_bits(z));
                 self.write_operand(bus, Operand8::from_bits(y), value);
@@ -599,8 +652,19 @@ impl Cpu {
         bus.tick();
     }
 
-    fn halt(&mut self) {
-        self.state = State::Halted;
+    /// HALT, including the hardware bug.
+    ///
+    /// Normally this parks the CPU until an interrupt is pending. But if IME is off
+    /// *and* an interrupt is already pending, the CPU does not halt at all — instead
+    /// the next opcode fetch fails to increment PC, so the following byte executes
+    /// twice. This is a real defect in the SM83, not an emulator convenience, and
+    /// some games depend on it, so it has to be reproduced.
+    fn halt(&mut self, bus: &mut impl Bus) {
+        if !self.ime && bus.pending_interrupt().is_some() {
+            self.halt_bug = true;
+        } else {
+            self.state = State::Halted;
+        }
     }
 
     fn stop(&mut self, bus: &mut impl Bus) {

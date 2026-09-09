@@ -58,6 +58,10 @@ impl Mbc5 {
 }
 
 impl Mbc for Mbc5 {
+    fn ram_bytes(&self) -> &[u8] {
+        self.ram.bytes()
+    }
+
     fn read_rom(&self, address: u16) -> u8 {
         let bank = if address < 0x4000 { 0 } else { self.rom_bank() };
         self.rom.read(bank, address)

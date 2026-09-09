@@ -90,6 +90,10 @@ impl Mbc1 {
 }
 
 impl Mbc for Mbc1 {
+    fn ram_bytes(&self) -> &[u8] {
+        self.ram.bytes()
+    }
+
     fn read_rom(&self, address: u16) -> u8 {
         self.rom.read(self.rom_bank(address), address)
     }

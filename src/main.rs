@@ -1,3 +1,4 @@
+mod apu;
 mod bus;
 mod cartridge;
 mod cpu;
@@ -130,11 +131,39 @@ fn build_bus(cart: &Cartridge) -> Option<TestBus> {
     }
 }
 
-/// Runs a Blargg-style test ROM and reports what it printed to the serial port.
+/// Reads a Blargg result out of cartridge RAM, if one has been written there.
 ///
-/// These ROMs write their result one character at a time to SB, so collecting those
-/// bytes turns the ROM into a pass/fail signal. They finish by writing "Passed" or
-/// "Failed", then spin forever, so we stop once the text says either.
+/// Not every Blargg suite reports over the serial port. `dmg_sound` and friends instead
+/// write their result into save RAM: a status byte at 0xA000, the signature 0xDE 0xB0
+/// 0x61 right after it, and the same text it would otherwise have printed, from 0xA004
+/// on. A status of 0x80 means "still running", so a harness can poll it.
+///
+/// Reading this goes around the RAM gate deliberately — the ROM shuts the gate before
+/// halting, and a save-file dumper would ignore it too.
+fn blargg_sram_result(ram: &[u8]) -> Option<(u8, String)> {
+    const SIGNATURE: [u8; 3] = [0xDE, 0xB0, 0x61];
+    const RUNNING: u8 = 0x80;
+
+    if ram.len() < 4 || ram[1..4] != SIGNATURE || ram[0] == RUNNING {
+        return None;
+    }
+
+    let text = ram[4..]
+        .iter()
+        .take_while(|&&byte| byte != 0)
+        .map(|&byte| byte as char)
+        .collect();
+    Some((ram[0], text))
+}
+
+/// Runs a Blargg-style test ROM and reports its result.
+///
+/// There are two reporting conventions and this handles both, because which one a ROM
+/// uses is not something you can tell by looking at it. Most write their output one
+/// character at a time to SB, finishing with "Passed" or "Failed"; the sound and timing
+/// suites instead leave a status byte and the text in cartridge RAM. A ROM using the
+/// second convention produces no serial output at all and then spins forever, which
+/// looks exactly like a hang if the harness only knows the first.
 fn run_test_rom(cart: &Cartridge) -> ExitCode {
     // A generous ceiling: the whole cpu_instrs suite needs well over 100M cycles.
     const MAX_CYCLES: u64 = 300_000_000;
@@ -144,22 +173,37 @@ fn run_test_rom(cart: &Cartridge) -> ExitCode {
     };
     let mut cpu = Cpu::new();
 
+    let mut sram_result = None;
     while bus.cycles < MAX_CYCLES {
         cpu.step(&mut bus);
 
-        // Checking the tail is cheap and only needs doing occasionally.
+        // Checking is cheap but not free, and only needs doing occasionally.
         if bus.cycles.is_multiple_of(0x1000) {
             let text = bus.serial.output_text();
             if text.contains("Passed") || text.contains("Failed") {
                 break;
             }
+            sram_result = blargg_sram_result(bus.cartridge_ram());
+            if sram_result.is_some() {
+                break;
+            }
         }
+    }
+
+    if let Some((status, text)) = sram_result {
+        println!("{}", text.trim());
+        // Blargg's convention: zero is a pass, anything else is the number of failures.
+        return if status == 0 {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::FAILURE
+        };
     }
 
     let output = bus.serial.output_text();
     let text = output.trim();
     if text.is_empty() {
-        eprintln!("no serial output after {} cycles", bus.cycles);
+        eprintln!("no result after {} cycles", bus.cycles);
         return ExitCode::FAILURE;
     }
 

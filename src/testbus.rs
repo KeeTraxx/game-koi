@@ -7,6 +7,7 @@
 //! Cartridge ROM and RAM go through the mapper rather than being indexed directly, so
 //! banked games work; everything else about the map is flat.
 
+use crate::apu::Apu;
 use crate::bus::Bus;
 use crate::cartridge::Cartridge;
 use crate::cartridge::mbc::{Mbc, UnsupportedMapper};
@@ -25,6 +26,7 @@ pub struct TestBus {
     pub timer: Timer,
     pub serial: Serial,
     pub ppu: Ppu,
+    pub apu: Apu,
     pub joypad: Joypad,
     pub interrupts: InterruptState,
     pub cycles: u64,
@@ -50,12 +52,18 @@ impl TestBus {
             timer: Timer::new(),
             serial: Serial::new(),
             ppu: Ppu::new(),
+            apu: Apu::new(),
             joypad: Joypad::new(),
             interrupts: InterruptState::default(),
             cycles: 0,
             dma_source: 0,
             dma_remaining: 0,
         })
+    }
+
+    /// The cartridge's save RAM, for a harness reading a test ROM's result out of it.
+    pub fn cartridge_ram(&self) -> &[u8] {
+        self.mbc.ram_bytes()
     }
 
     /// Copies one byte of an in-progress OAM DMA transfer.
@@ -93,6 +101,7 @@ impl Bus for TestBus {
             0xFF01..=0xFF02 => self.serial.read(address),
             0xFF04..=0xFF07 => self.timer.read(address),
             0xFF0F => self.interrupts.read_if(),
+            0xFF10..=0xFF3F => self.apu.read(address),
             0xFF46 => self.dma_source,
             0xFF40..=0xFF4B => self.ppu.read(address),
             // The I/O addresses nothing implements: no chip drives the bus, so it
@@ -106,7 +115,7 @@ impl Bus for TestBus {
             // this range with plain RAM instead and the probe reads back the 0x00 it
             // just wrote, the ROM concludes it is on a CGB, and it executes STOP —
             // which halts a DMG until a button is pressed, hanging the test forever.
-            0xFF03 | 0xFF08..=0xFF0E | 0xFF10..=0xFF3F | 0xFF4C..=0xFF7F => 0xFF,
+            0xFF03 | 0xFF08..=0xFF0E | 0xFF4C..=0xFF7F => 0xFF,
             0xFFFF => self.interrupts.enabled,
             _ => self.memory[address as usize],
         }
@@ -123,6 +132,7 @@ impl Bus for TestBus {
             0xFF01..=0xFF02 => self.serial.write(address, value),
             0xFF04..=0xFF07 => self.timer.write(address, value),
             0xFF0F => self.interrupts.write_if(value),
+            0xFF10..=0xFF3F => self.apu.write(address, value),
             // Writing DMA starts a 160-byte copy into OAM from the given page.
             0xFF46 => {
                 self.dma_source = value;
@@ -132,7 +142,7 @@ impl Bus for TestBus {
             // Writes to registers nothing implements go nowhere, rather than being
             // stored where a later read would find them and mistake them for a real
             // chip answering.
-            0xFF03 | 0xFF08..=0xFF0E | 0xFF10..=0xFF3F | 0xFF4C..=0xFF7F => {}
+            0xFF03 | 0xFF08..=0xFF0E | 0xFF4C..=0xFF7F => {}
             0xFFFF => self.interrupts.enabled = value,
             _ => self.memory[address as usize] = value,
         }
@@ -144,6 +154,9 @@ impl Bus for TestBus {
         // only mapper that does anything with it.
         self.mbc.tick();
         self.timer.tick(&mut self.interrupts);
+        // After the timer, so the APU sees this cycle's DIV: its 512 Hz sequencer is
+        // clocked by DIV bit 4 falling, not by a clock of its own.
+        self.apu.tick(self.timer.div());
         self.serial.tick(&mut self.interrupts);
         self.ppu.tick(&mut self.interrupts);
         self.step_dma();
@@ -155,5 +168,69 @@ impl Bus for TestBus {
 
     fn acknowledge_interrupt(&mut self, interrupt: Interrupt) {
         self.interrupts.acknowledge(interrupt);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cartridge::header;
+
+    /// The smallest cartridge the loader will accept: 32 KiB, no mapper, valid logo.
+    fn stub_cartridge() -> Cartridge {
+        let mut rom = vec![0u8; 32 * 1024];
+        header::write_logo_at(&mut rom, 0);
+        let checksum = rom[0x0134..0x014D]
+            .iter()
+            .fold(0u8, |acc, &byte| acc.wrapping_sub(byte).wrapping_sub(1));
+        rom[0x014D] = checksum;
+        Cartridge::from_bytes(rom, "stub.gb").expect("stub cartridge should parse")
+    }
+
+    /// The APU answers on 0xFF10-0xFF3F, and its registers are not plain memory.
+    ///
+    /// Worth testing at this level rather than only inside the APU: the bus used to
+    /// treat this whole range as unimplemented I/O reading 0xFF, and a routing mistake
+    /// here would leave every channel silent with all the APU's own tests still green.
+    #[test]
+    fn the_apu_is_wired_to_its_registers() {
+        let mut bus = TestBus::new(&stub_cartridge()).expect("no mapper needed");
+
+        // Powered off, NR52 reports so and writes elsewhere do nothing.
+        assert_eq!(bus.read(0xFF26) & 0x80, 0);
+        bus.write(0xFF12, 0xF0);
+        assert_eq!(bus.read(0xFF12), 0x00, "ignored while powered down");
+
+        bus.write(0xFF26, 0x80);
+        bus.write(0xFF12, 0xF0); // CH1 volume 15, DAC on
+        bus.write(0xFF14, 0x80); // trigger
+        assert_eq!(bus.read(0xFF26) & 0x01, 1, "CH1 is playing");
+
+        // Wave RAM is memory, but reached through the APU rather than the flat array.
+        bus.write(0xFF30, 0xAB);
+        assert_eq!(bus.read(0xFF30), 0xAB);
+    }
+
+    /// The APU's sequencer is clocked by DIV, so it must see the timer's DIV each cycle.
+    #[test]
+    fn ticking_the_bus_feeds_the_apu_samples() {
+        let mut bus = TestBus::new(&stub_cartridge()).expect("no mapper needed");
+        bus.write(0xFF26, 0x80); // power on
+        bus.write(0xFF24, 0x77); // full volume
+        bus.write(0xFF25, 0xFF); // both sides
+        bus.write(0xFF11, 0x80); // 50% duty
+        bus.write(0xFF12, 0xF0);
+        bus.write(0xFF13, 0x00);
+        bus.write(0xFF14, 0x84); // period 0x400, trigger
+
+        for _ in 0..100_000 {
+            bus.tick();
+        }
+
+        let mut samples = Vec::new();
+        bus.apu.drain_samples(&mut samples);
+        assert!(!samples.is_empty(), "the bus must drive the APU's clock");
+        let peak = samples.iter().map(|(l, _)| l.abs()).fold(0.0f32, f32::max);
+        assert!(peak > 0.05, "expected audio out of the bus, peak {peak}");
     }
 }

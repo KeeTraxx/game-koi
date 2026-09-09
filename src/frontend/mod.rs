@@ -19,6 +19,7 @@
 //! the host's refresh rate keeps the emulated machine running at the right speed on
 //! any monitor.
 
+mod audio;
 mod game_controller;
 mod keyboard_input;
 
@@ -36,6 +37,7 @@ use crate::cpu::Cpu;
 use crate::joypad::Button;
 use crate::ppu::{SCREEN_HEIGHT, SCREEN_WIDTH};
 use crate::testbus::TestBus;
+use audio::Audio;
 use game_controller::GameController;
 
 /// How long one emulated frame should take on the wall clock.
@@ -78,6 +80,18 @@ pub fn run(
     scale: u32,
     exit_after: Option<u64>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // Open the audio device before the emulator starts, so the APU can be told the
+    // device's real sample rate rather than resampling to a guess and then changing.
+    let audio = Audio::new();
+    match audio.as_ref() {
+        Some(audio) => println!(
+            "    audio: {} Hz, {} channels",
+            audio.sample_rate(),
+            audio.channels()
+        ),
+        None => println!("    audio: no output device; running silently"),
+    }
+
     let event_loop = EventLoop::new()?;
     // Poll rather than Wait: the emulator has work to do every frame regardless of
     // whether the OS sent us an event.
@@ -87,6 +101,8 @@ pub fn run(
         cpu: Cpu::new(),
         bus: TestBus::new(cart)?,
         gamepad: GameController::new(),
+        audio,
+        samples: Vec::new(),
         window: None,
         pixels: None,
         scale,
@@ -97,6 +113,11 @@ pub fn run(
         started: Instant::now(),
         exit_after,
     };
+    if let Some(audio) = app.audio.as_ref() {
+        let rate = audio.sample_rate();
+        app.bus.apu.set_sample_rate(rate);
+    }
+
     event_loop.run_app(&mut app)?;
     Ok(())
 }
@@ -106,6 +127,11 @@ struct App {
     bus: TestBus,
     /// Polled once per frame rather than event-driven; see [`game_controller`].
     gamepad: GameController,
+    /// `None` when the machine has no usable output device — the emulator still runs.
+    audio: Option<Audio>,
+    /// Scratch buffer for moving samples from the APU to the audio thread, reused every
+    /// frame so the audio path does not allocate.
+    samples: Vec<(f32, f32)>,
     /// Created on `resumed` rather than up front, because some platforms refuse to
     /// make a render surface before then.
     window: Option<std::sync::Arc<Window>>,
@@ -136,6 +162,21 @@ impl App {
             Action::TogglePause => self.paused = !self.paused,
             Action::Quit => event_loop.exit(),
         }
+    }
+
+    /// Moves a frame's worth of samples from the APU to the sound device.
+    fn drain_audio(&mut self) {
+        let Some(audio) = self.audio.as_ref() else {
+            // With no device the samples would pile up in the APU forever, so drop them.
+            self.samples.clear();
+            self.bus.apu.drain_samples(&mut self.samples);
+            self.samples.clear();
+            return;
+        };
+
+        self.samples.clear();
+        self.bus.apu.drain_samples(&mut self.samples);
+        audio.queue(&self.samples);
     }
 
     /// Runs the emulator until the PPU completes a frame, then draws it.
@@ -269,6 +310,7 @@ impl ApplicationHandler for App {
 
         if !self.paused {
             self.run_frame();
+            self.drain_audio();
             self.frames += 1;
 
             // Start the clock after the first frame: creating the window and GPU

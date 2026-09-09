@@ -68,6 +68,15 @@ pub trait Mbc {
     /// Writes to 0xA000-0xBFFF.
     fn write_ram(&mut self, address: u16, value: u8);
 
+    /// The cartridge RAM as it physically is, gate and banking ignored.
+    ///
+    /// Not a CPU-visible operation — this is for things standing outside the machine:
+    /// writing a save file, or reading a test ROM's result out of SRAM. The default is
+    /// empty, for a cartridge with no RAM at all.
+    fn ram_bytes(&self) -> &[u8] {
+        &[]
+    }
+
     /// Advances the mapper by one M-cycle.
     ///
     /// Only MBC3's clock needs this; the default does nothing, so the other mappers do
@@ -167,6 +176,11 @@ impl Ram {
         self.enabled = enabled;
     }
 
+    /// The chip's contents, ignoring the gate.
+    fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
     fn is_present(&self) -> bool {
         !self.bytes.is_empty()
     }
@@ -212,6 +226,10 @@ struct NoMbc {
 }
 
 impl Mbc for NoMbc {
+    fn ram_bytes(&self) -> &[u8] {
+        self.ram.bytes()
+    }
+
     fn read_rom(&self, address: u16) -> u8 {
         // Bank 0 for both windows: the 32 KiB image is addressed flat, so bank 1 is
         // just what physically follows bank 0.

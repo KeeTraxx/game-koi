@@ -20,11 +20,11 @@ This shapes how to work in this repo:
 
 ## State of the repo
 
-Steps 1-5 of the build order below are done; steps 6-7 are not started. The emulator opens a window and
-is playable, but only for 32 KiB no-MBC ROMs — most commercial games need step 6. Treat the unfinished
-steps as a plan, and verify against the actual tree before assuming a subsystem exists.
+All seven steps of the build order below are done: the emulator opens a window, plays banked commercial
+ROMs, and makes sound. What remains is accuracy work and the gaps listed per subsystem, not missing
+subsystems. Verify against the actual tree before assuming anything here is still current.
 
-- `src/cartridge/` — ROM loading and header parsing. No mapper support yet: only 32 KiB no-MBC ROMs.
+- `src/cartridge/` — ROM loading and header parsing. Mappers live in `mbc/`, below.
 - `src/bus.rs` — the `Bus` trait (`read`/`write`/`tick`/`pending_interrupt`/`acknowledge_interrupt`).
   Implementations are `FlatMemory` (CPU unit tests) and `TestBus`. Interrupts flow CPU-asks-bus, never
   bus-calls-CPU — keep it that way.
@@ -37,14 +37,21 @@ steps as a plan, and verify against the actual tree before assuming a subsystem 
   bytes test ROMs print. External-clock transfers never complete, as on hardware.
 - `src/ppu/` — the PPU. Scanline state machine, background, window, sprites, VRAM/OAM mode locking.
   `fetch.rs` holds the rendering; `mod.rs` the timing and registers.
+- `src/apu/` — the APU. `mod.rs` holds the registers, the DIV-APU sequencer, the mixer and the resampler;
+  `square.rs` (CH1+CH2, sweep included), `wave.rs` (CH3), `noise.rs` (CH4), and `units.rs` for the length
+  timer and envelope both share. The 512 Hz sequencer is **DIV bit 4 falling**, not a clock of its own,
+  so a `DIV` write can step it early — that falls out rather than being special-cased. The APU emits
+  finished stereo samples into a bounded queue; the core never talks to an audio device.
 - `src/joypad.rs` — P1. All the active-low inversion lives here; the public API is plain
   `press`/`release`. Selecting a button group means writing its select bit **low**.
-- `src/frontend/` — window, input, frame pacing (winit + pixels + gilrs). The only module outside the
+- `src/frontend/` — window, input, audio out, frame pacing (winit + pixels + gilrs + cpal). The only module outside the
   emulated machine; the core never depends on it, which is what keeps `--test` and `--screenshot`
   headless. `mod.rs` holds the window, the palette, pacing, and the `Action` enum both input devices
   emit; `keyboard_input.rs` and `game_controller.rs` are pure per-device translation to `Action`, so
   both are unit-testable with no window and no gamepad attached. Gamepads are drained once per frame
-  in `about_to_wait` because gilrs keeps its own queue outside winit's event stream.
+  in `about_to_wait` because gilrs keeps its own queue outside winit's event stream. `audio.rs` drains the
+  APU's queue into cpal through a `Mutex<VecDeque>`; a missing sound device is not an error, it just runs
+  silently.
 - `src/cartridge/mbc/` — the mapper chips, behind an `Mbc` trait (ROM/RAM read and write, plus a `tick`
   only MBC3 uses). `mod.rs` holds the trait, the factory, and the shared `Rom`/`Ram` chip types that own
   the "bank number plus CPU address becomes a chip offset" wiring — so each of `mbc1.rs`, `mbc2.rs`,
@@ -104,6 +111,11 @@ source for hardware behavior; consult it over recalled details when they conflic
 Caveat carried from the document itself: it covers **DMG and 2nd-gen devices, pre-Game Boy Color**. Do not
 generalize its timing or register behavior to CGB.
 
+**gbctr has no APU chapter** — rev 192 covers the sound registers in the memory map and nothing else, so
+Pandocs is the primary source for the APU specifically. `gbdev.io` blocks plain fetches; the Markdown
+sources are readable from `raw.githubusercontent.com/gbdev/pandocs/master/src/` (`Audio.md`,
+`Audio_Registers.md`, `Audio_details.md`).
+
 Pandocs (gbdev.io/pandocs) is the other standard reference and is easier to skim for memory-map and
 register layouts; the PDF is more precise on timing and edge cases.
 
@@ -149,15 +161,28 @@ Suggested order, each step ending somewhere runnable:
    cartridge RAM is emulated but never written to disk, so saves die with the process (`Cartridge::path`
    is already kept for naming a save file), and the exotic mappers (MBC6, MBC7, HuC1/3, MMM01, Tama5,
    Pocket Camera), which together account for a handful of titles.
-7. **APU** — audio is genuinely the hardest to get right and the least necessary; leave it for the end.
+7. ~~**APU**~~ — done. All four channels, the DIV-APU sequencer, the mixer with its DC-removing high-pass
+   filter, and cpal output. Not done: **DMG wave RAM access timing** (see below), and the "zombie mode"
+   envelope writes, which are model-dependent even on real hardware.
 
 ## Testing
 
 `cargo test` runs unit tests; `cargo test --release` also runs the ROM suites (release, or they crawl).
 `tests/blargg.rs` and `tests/mooneye.rs` shell out to the built binary's `--test` and `--mooneye` modes.
 
-**Currently passing:** all 11 Blargg `cpu_instrs` ROMs, the combined `cpu_instrs.gb`, `instr_timing`, and
-all 28 Mooneye `emulator-only` mapper ROMs (13 mbc1, 7 mbc2, 8 mbc5).
+**Currently passing:** all 11 Blargg `cpu_instrs` ROMs, the combined `cpu_instrs.gb`, `instr_timing`,
+9 of the 12 Blargg `dmg_sound` ROMs, and all 28 Mooneye `emulator-only` mapper ROMs (13 mbc1, 7 mbc2,
+8 mbc5).
+
+**Two Blargg reporting conventions.** Most suites print to the serial port; `dmg_sound` instead writes a
+status byte and its text into cartridge RAM at 0xA000 behind the signature `DE B0 61`. `--test` checks
+both, because a ROM using the second one produces no serial output and then spins in `jr $` — which looks
+exactly like a hang if you only know the first.
+
+**The APU's known gap** is DMG wave RAM access timing: on hardware the CPU can reach wave RAM on the exact
+cycle CH3 reads a sample, and gets the byte CH3 is reading whatever address it asked for. This bus ticks
+whole M-cycles with CPU reads outside them, so it cannot express "the same cycle". Blargg's sound tests
+`09`, `10` and `12` are the only things that notice.
 
 **MBC3 has no ROM coverage** — Mooneye ships no `mbc3` group — so its banking and its RTC rest on unit
 tests alone. Treat it as the least-proven mapper.
@@ -165,7 +190,7 @@ tests alone. Treat it as the least-proven mapper.
 The ROMs live in `test-roms/` and are **not committed** (gitignored):
 
 - Blargg, from <https://github.com/retrio/gb-test-roms> — `test-roms/cpu_instrs.gb`,
-  `test-roms/instr_timing.gb`, `test-roms/individual/`. The individual filenames contain spaces and
+  `test-roms/instr_timing.gb`, `test-roms/individual/`, `test-roms/dmg_sound/` (from `rom_singles/`). The individual filenames contain spaces and
   commas, so raw URLs need percent-encoding.
 - Mooneye, from <https://gekkio.fi/files/mooneye-test-suite/> (built ROMs; the GitHub repo has no
   releases) — put the `emulator-only/mbc1`, `mbc2` and `mbc5` directories under `test-roms/mooneye/`.

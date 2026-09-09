@@ -121,6 +121,91 @@ fn cpu_instrs_combined() {
     );
 }
 
+/// Runs one of the `dmg_sound` ROMs.
+///
+/// These report through cartridge RAM rather than the serial port; `--test` handles
+/// both conventions, so this looks the same as any other check from here.
+fn check_sound(name: &str) {
+    let rom = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("test-roms/dmg_sound")
+        .join(format!("{name}.gb"));
+
+    let Some(output) = run_rom(&rom) else {
+        eprintln!("skipping {name}: {} not found", rom.display());
+        return;
+    };
+
+    assert!(
+        output.contains("Passed"),
+        "{name} did not pass:\n{}",
+        output.trim()
+    );
+}
+
+/// Every APU register's read-back mask, byte by byte.
+#[test]
+fn sound_registers() {
+    check_sound("01-registers");
+}
+
+/// The length counters, at 256 Hz off the DIV-APU sequencer.
+#[test]
+fn sound_len_ctr() {
+    check_sound("02-len ctr");
+}
+
+/// What a trigger does, including the extra length clock that depends on which half of
+/// the sequencer period the write lands in.
+#[test]
+fn sound_trigger() {
+    check_sound("03-trigger");
+}
+
+/// CH1's period sweep.
+#[test]
+fn sound_sweep() {
+    check_sound("04-sweep");
+}
+
+/// The sweep's finer points: when the shadow register is reloaded and when the pace is
+/// re-read.
+#[test]
+fn sound_sweep_details() {
+    check_sound("05-sweep details");
+}
+
+/// The overflow check that runs immediately on trigger, before a note is heard.
+#[test]
+fn sound_overflow_on_trigger() {
+    check_sound("06-overflow on trigger");
+}
+
+/// That the sequencer's timing stays tied to DIV across an APU power cycle, while its
+/// step count restarts.
+#[test]
+fn sound_len_sweep_period_sync() {
+    check_sound("07-len sweep period sync");
+}
+
+/// Length counters across a power cycle — they survive it on a DMG.
+#[test]
+fn sound_len_ctr_during_power() {
+    check_sound("08-len ctr during power");
+}
+
+/// The registers a power cycle clears, and the length loads it does not.
+#[test]
+fn sound_regs_after_power() {
+    check_sound("11-regs after power");
+}
+
+// Not run: `09-wave read while on`, `10-wave trigger while on`, and `12-wave write
+// while on`. All three turn on DMG wave RAM access timing — the CPU can only reach
+// wave RAM on the exact cycle CH3 reads a sample, and CH3's read position decides
+// which byte it gets. Expressing that needs the CPU's memory access to be placed
+// *within* an M-cycle relative to the APU's, and this bus ticks whole M-cycles with
+// reads outside them. See the note in `src/apu/wave.rs`.
+
 /// Checks instruction cycle counts, which the ROM measures against the timer — so
 /// this exercises the CPU and timer together.
 #[test]

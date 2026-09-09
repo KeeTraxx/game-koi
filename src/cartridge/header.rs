@@ -227,7 +227,7 @@ impl Header {
             return Err(HeaderError::TooShort { len: rom.len() });
         }
 
-        if rom[offset::LOGO..offset::LOGO + NINTENDO_LOGO.len()] != NINTENDO_LOGO {
+        if !has_logo_at(rom, 0) {
             return Err(HeaderError::BadLogo);
         }
 
@@ -280,6 +280,28 @@ impl Header {
     pub fn ram_banks(&self) -> usize {
         self.ram_size.div_ceil(0x2000)
     }
+}
+
+/// Whether a correct Nintendo logo sits at `base + 0x0104`.
+///
+/// `base` is a physical offset into the image, not an address the CPU can see. It is 0
+/// for the cartridge's own header, but MBC1 multicarts carry a full header per bundled
+/// game, and finding several logos at 256 KiB intervals is the only way to recognize
+/// one — the type byte is indistinguishable from a plain MBC1. See `mbc::mbc1`.
+pub fn has_logo_at(rom: &[u8], base: usize) -> bool {
+    let start = base + offset::LOGO;
+    let end = start + NINTENDO_LOGO.len();
+    rom.len() >= end && rom[start..end] == NINTENDO_LOGO
+}
+
+/// Stamps a Nintendo logo at `base + 0x0104`.
+///
+/// Test-only companion to [`has_logo_at`], so tests elsewhere can build an image that
+/// looks like a multicart without needing a copy of the logo bytes.
+#[cfg(test)]
+pub fn write_logo_at(rom: &mut [u8], base: usize) {
+    let start = base + offset::LOGO;
+    rom[start..start + NINTENDO_LOGO.len()].copy_from_slice(&NINTENDO_LOGO);
 }
 
 impl fmt::Display for Header {

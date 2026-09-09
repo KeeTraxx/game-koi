@@ -140,6 +140,9 @@ impl Bus for TestBus {
 
     fn tick(&mut self) {
         self.cycles += 1;
+        // The cartridge is on the same clock as everything else — MBC3's RTC is the
+        // only mapper that does anything with it.
+        self.mbc.tick();
         self.timer.tick(&mut self.interrupts);
         self.serial.tick(&mut self.interrupts);
         self.ppu.tick(&mut self.interrupts);

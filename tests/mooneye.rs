@@ -13,10 +13,12 @@
 //! "Passed"/"Failed".
 //!
 //! The ROMs are not committed. Fetch a build from
-//! <https://gekkio.fi/files/mooneye-test-suite/> and put the `emulator-only/mbc1`
-//! directory at `test-roms/mooneye/mbc1`. Missing ROMs skip rather than fail, so a
-//! fresh clone stays green — which also means a green run proves nothing if the
-//! directory is empty.
+//! <https://gekkio.fi/files/mooneye-test-suite/> and put its `emulator-only/mbc1`,
+//! `mbc2` and `mbc5` directories under `test-roms/mooneye/`. Missing ROMs skip rather
+//! than fail, so a fresh clone stays green — which also means a green run proves
+//! nothing if the directory is empty.
+//!
+//! There is no `mbc3` group upstream, so MBC3 and its clock rest on unit tests alone.
 
 use std::path::Path;
 use std::process::Command;
@@ -118,8 +120,96 @@ fn mbc1_rom_16mb() {
     check("mbc1", "rom_16Mb");
 }
 
-// Not run: `multicart_rom_8Mb`. That ROM targets MBC1M, a variant board where BANK1 is
-// only 4 bits wide so the cart splits into four independent 256 KiB games. It is not
-// distinguishable from the header — emulators detect it by finding several Nintendo
-// logos in the image — and only a handful of compilation cartridges use it. We do not
-// implement it, so the test is left out rather than left failing.
+/// MBC1M, the multicart board: BANK1's bit 4 is not connected, so the bank number is 6
+/// bits and BANK2 acts as a game selector. Nothing in the header says so — passing this
+/// depends on the logo-sniffing heuristic in `mbc::mbc1::is_multicart` firing.
+#[test]
+fn mbc1_multicart_rom_8mb() {
+    check("mbc1", "multicart_rom_8Mb");
+}
+
+// MBC2. Its registers are picked by address bit A8 rather than by address range, and
+// its RAM is 512 x 4 bits inside the mapper chip itself.
+
+/// Which values open the RAM gate: the low nibble only, as on MBC1.
+#[test]
+fn mbc2_bits_ramg() {
+    check("mbc2", "bits_ramg");
+}
+
+/// The ROM bank register is 4 bits and zero-adjusted.
+#[test]
+fn mbc2_bits_romb() {
+    check("mbc2", "bits_romb");
+}
+
+/// The upper nibble of the on-chip RAM does not physically exist.
+#[test]
+fn mbc2_bits_unused() {
+    check("mbc2", "bits_unused");
+}
+
+/// The 512-nibble RAM, including how it wraps across the 8 KiB window.
+#[test]
+fn mbc2_ram() {
+    check("mbc2", "ram");
+}
+
+#[test]
+fn mbc2_rom_512kb() {
+    check("mbc2", "rom_512kb");
+}
+
+#[test]
+fn mbc2_rom_1mb() {
+    check("mbc2", "rom_1Mb");
+}
+
+#[test]
+fn mbc2_rom_2mb() {
+    check("mbc2", "rom_2Mb");
+}
+
+// MBC5. The bank number spans two registers for nine bits, and — unlike every earlier
+// mapper — bank 0 can be selected into the high window.
+
+#[test]
+fn mbc5_rom_512kb() {
+    check("mbc5", "rom_512kb");
+}
+
+#[test]
+fn mbc5_rom_1mb() {
+    check("mbc5", "rom_1Mb");
+}
+
+#[test]
+fn mbc5_rom_2mb() {
+    check("mbc5", "rom_2Mb");
+}
+
+#[test]
+fn mbc5_rom_4mb() {
+    check("mbc5", "rom_4Mb");
+}
+
+#[test]
+fn mbc5_rom_8mb() {
+    check("mbc5", "rom_8Mb");
+}
+
+#[test]
+fn mbc5_rom_16mb() {
+    check("mbc5", "rom_16Mb");
+}
+
+#[test]
+fn mbc5_rom_32mb() {
+    check("mbc5", "rom_32Mb");
+}
+
+/// The largest cartridge any mapper supports: 8 MiB, all nine bank bits in use.
+#[test]
+fn mbc5_rom_64mb() {
+    check("mbc5", "rom_64Mb");
+}

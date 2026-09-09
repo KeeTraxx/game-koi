@@ -45,9 +45,17 @@ steps as a plan, and verify against the actual tree before assuming a subsystem 
   emit; `keyboard_input.rs` and `game_controller.rs` are pure per-device translation to `Action`, so
   both are unit-testable with no window and no gamepad attached. Gamepads are drained once per frame
   in `about_to_wait` because gilrs keeps its own queue outside winit's event stream.
-- `src/cartridge/mbc.rs` — the mapper chips, behind an `Mbc` trait of four operations (ROM/RAM read and
-  write). `NoMbc` and `Mbc1` are implemented; anything else is a typed `UnsupportedMapper` error at bus
-  construction rather than a silently wrong run. `Cartridge::create_mbc` is the factory.
+- `src/cartridge/mbc/` — the mapper chips, behind an `Mbc` trait (ROM/RAM read and write, plus a `tick`
+  only MBC3 uses). `mod.rs` holds the trait, the factory, and the shared `Rom`/`Ram` chip types that own
+  the "bank number plus CPU address becomes a chip offset" wiring — so each of `mbc1.rs`, `mbc2.rs`,
+  `mbc3.rs`, `mbc5.rs` is only about its own registers. `NoMbc`, MBC1 (including the MBC1M multicart
+  variant), MBC2, MBC3 (+RTC), and MBC5 are implemented; anything else is a typed `UnsupportedMapper`
+  error at bus construction rather than a silently wrong run. `Cartridge::create_mbc` is the factory.
+
+  Two things to keep straight, because they differ *between* chips and are easy to unify by mistake: the
+  RAM gate decodes the low nibble on MBC1/MBC2/MBC3 but compares all eight bits on MBC5, and only MBC5
+  lets bank 0 into the high window. Bank numbers are always masked, never bounds-checked — unconnected
+  address lines are why, and Mooneye's `rom_*` tests check for the wrap.
 - `src/testbus.rs` — `TestBus`, the stopgap bus wiring the cartridge (through its mapper), WRAM, timer,
   serial, PPU, OAM DMA, and interrupts. Used by `--trace`, `--test`, `--mooneye`, `--screenshot`, and the
   integration tests. I/O addresses no chip implements read **0xFF**, not RAM — see the comment on that
@@ -136,10 +144,11 @@ Suggested order, each step ending somewhere runnable:
 5. ~~**Host frontend**~~ — done. winit 0.30 + pixels 0.17 + gilrs 0.11, the only dependencies, all
    host-side. Paces on the emulator's own frame completion (59.73 Hz), not the host refresh rate.
    Keyboard and gamepad are both live at once.
-6. ~~**MBC1**~~ — done. `src/cartridge/mbc.rs`. Not done: **MBC1M**, the multicart variant with a 4-bit
-   BANK1, which cannot be identified from the header (emulators sniff for repeated Nintendo logos), and
-   **battery-backed saves** — cartridge RAM is emulated but never written to disk, so saves die with the
-   process. `Cartridge::path` is already kept for naming a save file. MBC3 (+RTC) and MBC5 are next.
+6. ~~**MBC1 and beyond**~~ — done. `src/cartridge/mbc/`: MBC1 (+MBC1M), MBC2, MBC3 (+RTC), MBC5. That
+   covers essentially every commercial DMG and CGB cartridge. Still missing: **battery-backed saves** —
+   cartridge RAM is emulated but never written to disk, so saves die with the process (`Cartridge::path`
+   is already kept for naming a save file), and the exotic mappers (MBC6, MBC7, HuC1/3, MMM01, Tama5,
+   Pocket Camera), which together account for a handful of titles.
 7. **APU** — audio is genuinely the hardest to get right and the least necessary; leave it for the end.
 
 ## Testing
@@ -148,8 +157,10 @@ Suggested order, each step ending somewhere runnable:
 `tests/blargg.rs` and `tests/mooneye.rs` shell out to the built binary's `--test` and `--mooneye` modes.
 
 **Currently passing:** all 11 Blargg `cpu_instrs` ROMs, the combined `cpu_instrs.gb`, `instr_timing`, and
-12 of the 13 Mooneye `emulator-only/mbc1` ROMs. The exception is `multicart_rom_8Mb` (MBC1M), which is
-not implemented and is deliberately not listed as a test.
+all 28 Mooneye `emulator-only` mapper ROMs (13 mbc1, 7 mbc2, 8 mbc5).
+
+**MBC3 has no ROM coverage** — Mooneye ships no `mbc3` group — so its banking and its RTC rest on unit
+tests alone. Treat it as the least-proven mapper.
 
 The ROMs live in `test-roms/` and are **not committed** (gitignored):
 
@@ -157,7 +168,7 @@ The ROMs live in `test-roms/` and are **not committed** (gitignored):
   `test-roms/instr_timing.gb`, `test-roms/individual/`. The individual filenames contain spaces and
   commas, so raw URLs need percent-encoding.
 - Mooneye, from <https://gekkio.fi/files/mooneye-test-suite/> (built ROMs; the GitHub repo has no
-  releases) — put `emulator-only/mbc1` at `test-roms/mooneye/mbc1/`.
+  releases) — put the `emulator-only/mbc1`, `mbc2` and `mbc5` directories under `test-roms/mooneye/`.
 
 When the ROMs are absent the tests **skip rather than fail**, so a fresh clone stays green — which also
 means a passing run proves nothing if the directory is empty. Check for skip lines with
@@ -166,7 +177,7 @@ means a passing run proves nothing if the directory is empty. Check for skip lin
 The combined `cpu_instrs.gb` (64 KiB, MBC1) is the banking regression test: the 11 individual ROMs are
 all 32 KiB and exercise no mapper at all. Two things had to be right before it passed, and only one of
 them was banking — the other was unimplemented I/O reading 0xFF. Mooneye's *timing* suite is the next
-rung up from here.
+rung up from here, and it will need the PPU's mode-3 timing fixed before it can pass.
 
 Watch for: `cpu_instrs.gb` ships with a **deliberately wrong global checksum**, which is why the header
 parser records checksums rather than enforcing them.

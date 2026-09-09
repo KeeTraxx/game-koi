@@ -154,7 +154,10 @@ impl Envelope {
             return;
         }
 
-        self.timer -= 1;
+        // Saturating, not plain subtraction: the timer is only loaded by a trigger, so
+        // a game that writes a non-zero pace into NRx2 without retriggering leaves it
+        // at zero here. On hardware that just means the next tick fires immediately.
+        self.timer = self.timer.saturating_sub(1);
         if self.timer != 0 {
             return;
         }
@@ -268,6 +271,21 @@ mod tests {
             envelope.tick();
         }
         assert_eq!(envelope.volume(), 15);
+    }
+
+    #[test]
+    fn raising_the_pace_without_a_trigger_does_not_underflow() {
+        // A game that starts with a pace of 0 and later writes a non-zero one, without
+        // retriggering, leaves the timer at 0. Blargg's `01-registers` does exactly
+        // this; before the timer saturated, a debug build panicked here.
+        let mut envelope = Envelope::new();
+        envelope.write(0xF0); // volume 15, pace 0
+        envelope.trigger();
+        envelope.write(0xF3); // pace 3, no trigger
+        for _ in 0..10 {
+            envelope.tick();
+        }
+        assert!(envelope.volume() < 15, "the envelope started moving");
     }
 
     #[test]

@@ -10,7 +10,7 @@
 use crate::apu::Apu;
 use crate::bus::Bus;
 use crate::cartridge::Cartridge;
-use crate::cartridge::mbc::{Mbc, UnsupportedMapper};
+use crate::cartridge::mbc::{Mbc, Ram, UnsupportedMapper};
 use crate::interrupts::{Interrupt, InterruptState};
 use crate::joypad::Joypad;
 use crate::ppu::Ppu;
@@ -63,7 +63,13 @@ impl TestBus {
 
     /// The cartridge's save RAM, for a harness reading a test ROM's result out of it.
     pub fn cartridge_ram(&self) -> &[u8] {
-        self.mbc.ram_bytes()
+        self.mbc.ram().map_or(&[], Ram::bytes)
+    }
+
+    /// The RAM chip itself, for loading and storing a save file. Bypasses the gate and
+    /// the bank registers, neither of which concerns a save.
+    pub fn cartridge_ram_mut(&mut self) -> Option<&mut Ram> {
+        self.mbc.ram_mut()
     }
 
     /// Copies one byte of an in-progress OAM DMA transfer.

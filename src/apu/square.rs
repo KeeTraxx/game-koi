@@ -301,7 +301,9 @@ impl Sweep {
             return SweepResult::default();
         }
 
-        self.timer -= 1;
+        // Saturating for the same reason as the envelope's: nothing reloads this
+        // outside a trigger, so a write to NR10 can find it already at zero.
+        self.timer = self.timer.saturating_sub(1);
         if self.timer != 0 {
             return SweepResult::default();
         }

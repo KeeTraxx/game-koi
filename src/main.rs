@@ -6,6 +6,7 @@ mod frontend;
 mod interrupts;
 mod joypad;
 mod ppu;
+mod save;
 mod serial;
 mod testbus;
 mod timer;

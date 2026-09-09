@@ -68,13 +68,18 @@ pub trait Mbc {
     /// Writes to 0xA000-0xBFFF.
     fn write_ram(&mut self, address: u16, value: u8);
 
-    /// The cartridge RAM as it physically is, gate and banking ignored.
+    /// The cartridge's RAM chip, if the board has one.
     ///
     /// Not a CPU-visible operation — this is for things standing outside the machine:
-    /// writing a save file, or reading a test ROM's result out of SRAM. The default is
-    /// empty, for a cartridge with no RAM at all.
-    fn ram_bytes(&self) -> &[u8] {
-        &[]
+    /// loading and writing a save file, or reading a test ROM's result out of SRAM.
+    /// Both the gate and the bank registers are bypassed, because neither is any of a
+    /// save file's business.
+    fn ram(&self) -> Option<&Ram> {
+        None
+    }
+
+    fn ram_mut(&mut self) -> Option<&mut Ram> {
+        None
     }
 
     /// Advances the mapper by one M-cycle.
@@ -159,9 +164,13 @@ impl Rom {
 /// after, so that a console browning out mid-write cannot scribble on the save. Every
 /// mapper implements it, and Mooneye's `bits_ramg` tests check exactly which written
 /// values open it — which is *not* the same on every chip.
-struct Ram {
+pub struct Ram {
     bytes: Vec<u8>,
     enabled: bool,
+    /// Whether anything has been written since the last time a save was taken. Purely
+    /// a host-side concern — the hardware has no such bit — but it is what lets the
+    /// autosave skip rewriting a file nothing has touched.
+    dirty: bool,
 }
 
 impl Ram {
@@ -169,6 +178,7 @@ impl Ram {
         Ram {
             bytes: vec![0; size],
             enabled: false,
+            dirty: false,
         }
     }
 
@@ -177,8 +187,27 @@ impl Ram {
     }
 
     /// The chip's contents, ignoring the gate.
-    fn bytes(&self) -> &[u8] {
+    pub fn bytes(&self) -> &[u8] {
         &self.bytes
+    }
+
+    /// Fills the chip from a save file, ignoring the gate.
+    ///
+    /// Copies as much as fits in both directions rather than requiring an exact match,
+    /// so a save with a trailing section this emulator does not understand — some
+    /// emulators append RTC state — still restores its RAM.
+    pub fn load(&mut self, data: &[u8]) {
+        let len = self.bytes.len().min(data.len());
+        self.bytes[..len].copy_from_slice(&data[..len]);
+        self.dirty = false;
+    }
+
+    pub fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+
+    pub fn mark_clean(&mut self) {
+        self.dirty = false;
     }
 
     fn is_present(&self) -> bool {
@@ -210,6 +239,7 @@ impl Ram {
     fn write(&mut self, bank: usize, address: u16, value: u8) {
         if let Some(offset) = self.offset(bank, address) {
             self.bytes[offset] = value;
+            self.dirty = true;
         }
     }
 }
@@ -226,8 +256,12 @@ struct NoMbc {
 }
 
 impl Mbc for NoMbc {
-    fn ram_bytes(&self) -> &[u8] {
-        self.ram.bytes()
+    fn ram(&self) -> Option<&Ram> {
+        Some(&self.ram)
+    }
+
+    fn ram_mut(&mut self) -> Option<&mut Ram> {
+        Some(&mut self.ram)
     }
 
     fn read_rom(&self, address: u16) -> u8 {

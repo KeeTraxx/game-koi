@@ -42,6 +42,12 @@ subsystems. Verify against the actual tree before assuming anything here is stil
   timer and envelope both share. The 512 Hz sequencer is **DIV bit 4 falling**, not a clock of its own,
   so a `DIV` write can step it early — that falls out rather than being special-cased. The APU emits
   finished stereo samples into a bounded queue; the core never talks to an audio device.
+- `src/save.rs` — battery-backed saves. Only for cartridges whose header says they have a battery: RAM on
+  a battery-less board is volatile on hardware too, so persisting it would invent a memory the cartridge
+  never had. Files go in `dirs::data_dir()/gbemu-rs/<rom-stem>.sav` (data, not config — a save is
+  generated state), are written through a temporary plus a rename so a crash cannot truncate one, and are
+  autosaved every 120 frames when the RAM is dirty as well as on exit. Only the play path saves; `--test`
+  and friends must not, since Blargg's ROMs write their results into SRAM. **MBC3's RTC is not persisted.**
 - `src/joypad.rs` — P1. All the active-low inversion lives here; the public API is plain
   `press`/`release`. Selecting a button group means writing its select bit **low**.
 - `src/frontend/` — window, input, audio out, frame pacing (winit + pixels + gilrs + cpal). The only module outside the
@@ -153,14 +159,13 @@ Suggested order, each step ending somewhere runnable:
    count and scroll, and a scanline is drawn in one go on entering HBlank instead of pixel by pixel — so
    mid-scanline register changes are not modelled. Both are fine for games, not for Mooneye's PPU timing
    tests.
-5. ~~**Host frontend**~~ — done. winit 0.30 + pixels 0.17 + gilrs 0.11, the only dependencies, all
-   host-side. Paces on the emulator's own frame completion (59.73 Hz), not the host refresh rate.
+5. ~~**Host frontend**~~ — done. winit 0.30 + pixels 0.17 + gilrs 0.11 + cpal 0.18 + dirs 7, the only
+   dependencies, all host-side. Paces on the emulator's own frame completion (59.73 Hz), not the host refresh rate.
    Keyboard and gamepad are both live at once.
-6. ~~**MBC1 and beyond**~~ — done. `src/cartridge/mbc/`: MBC1 (+MBC1M), MBC2, MBC3 (+RTC), MBC5. That
-   covers essentially every commercial DMG and CGB cartridge. Still missing: **battery-backed saves** —
-   cartridge RAM is emulated but never written to disk, so saves die with the process (`Cartridge::path`
-   is already kept for naming a save file), and the exotic mappers (MBC6, MBC7, HuC1/3, MMM01, Tama5,
-   Pocket Camera), which together account for a handful of titles.
+6. ~~**MBC1 and beyond**~~ — done. `src/cartridge/mbc/`: MBC1 (+MBC1M), MBC2, MBC3 (+RTC), MBC5, plus
+   battery-backed saves in `src/save.rs`. That covers essentially every commercial DMG and CGB cartridge.
+   Still missing: **MBC3's RTC is not persisted** across runs, and the exotic mappers (MBC6, MBC7,
+   HuC1/3, MMM01, Tama5, Pocket Camera), which together account for a handful of titles.
 7. ~~**APU**~~ — done. All four channels, the DIV-APU sequencer, the mixer with its DC-removing high-pass
    filter, and cpal output. Not done: **DMG wave RAM access timing** (see below), and the "zombie mode"
    envelope writes, which are model-dependent even on real hardware.

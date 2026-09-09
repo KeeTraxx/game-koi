@@ -36,6 +36,7 @@ use crate::cartridge::Cartridge;
 use crate::cpu::Cpu;
 use crate::joypad::Button;
 use crate::ppu::{SCREEN_HEIGHT, SCREEN_WIDTH};
+use crate::save::SaveFile;
 use crate::testbus::TestBus;
 use audio::Audio;
 use game_controller::GameController;
@@ -45,6 +46,13 @@ use game_controller::GameController;
 /// 70224 T-cycles at 4194304 Hz. Using the exact figure rather than 1/60 s keeps
 /// long sessions from drifting audibly once sound exists.
 const FRAME_TIME: Duration = Duration::from_nanos(16_742_706);
+
+/// How often to write the save file out, in frames — about two seconds.
+///
+/// A save is written when the window closes, but nothing guarantees that happens: the
+/// process can be killed, or the machine can lose power. Checking periodically costs
+/// nothing when the game has not touched its RAM, which is almost always.
+const AUTOSAVE_FRAMES: u64 = 120;
 
 /// The four DMG shades as RGBA, from lightest to darkest.
 ///
@@ -102,6 +110,7 @@ pub fn run(
         bus: TestBus::new(cart)?,
         gamepad: GameController::new(),
         audio,
+        save: None,
         samples: Vec::new(),
         window: None,
         pixels: None,
@@ -118,7 +127,25 @@ pub fn run(
         app.bus.apu.set_sample_rate(rate);
     }
 
-    event_loop.run_app(&mut app)?;
+    // Restore the save before the CPU runs a single instruction: the game reads its
+    // save RAM during startup, so loading any later means it has already decided the
+    // cartridge is blank.
+    app.save = SaveFile::for_cartridge(cart);
+    if let Some(save) = app.save.as_ref() {
+        println!("     save: {}", save.path().display());
+        match save.load(&mut app.bus) {
+            Ok(true) => println!("           loaded"),
+            Ok(false) => println!("           new file; nothing to load yet"),
+            Err(err) => eprintln!("warning: could not read the save file: {err}"),
+        }
+    }
+
+    let result = event_loop.run_app(&mut app);
+
+    // Write the save even if the event loop failed — whatever went wrong with the
+    // window, the player's progress is still worth keeping.
+    app.write_save();
+    result?;
     Ok(())
 }
 
@@ -129,6 +156,8 @@ struct App {
     gamepad: GameController,
     /// `None` when the machine has no usable output device — the emulator still runs.
     audio: Option<Audio>,
+    /// `None` for a cartridge with no battery, whose RAM is meant to be forgotten.
+    save: Option<SaveFile>,
     /// Scratch buffer for moving samples from the APU to the audio thread, reused every
     /// frame so the audio path does not allocate.
     samples: Vec<(f32, f32)>,
@@ -162,6 +191,20 @@ impl App {
             Action::TogglePause => self.paused = !self.paused,
             Action::Quit => event_loop.exit(),
         }
+    }
+
+    /// Writes the save file, reporting a failure rather than swallowing it.
+    ///
+    /// Losing a save silently is the worst possible outcome here: the player finds out
+    /// hours later, and there is nothing left to recover.
+    fn write_save(&mut self) {
+        let Some(save) = self.save.take() else {
+            return;
+        };
+        if let Err(err) = save.store_if_dirty(&mut self.bus) {
+            eprintln!("error: could not write {}: {err}", save.path().display());
+        }
+        self.save = Some(save);
     }
 
     /// Moves a frame's worth of samples from the APU to the sound device.
@@ -318,6 +361,10 @@ impl ApplicationHandler for App {
             // cost into a short run makes the frame rate look far worse than it is.
             if self.frames == 1 {
                 self.started = Instant::now();
+            }
+
+            if self.frames.is_multiple_of(AUTOSAVE_FRAMES) {
+                self.write_save();
             }
 
             if let Some(limit) = self.exit_after

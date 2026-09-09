@@ -214,8 +214,12 @@ impl Mbc3 {
 }
 
 impl Mbc for Mbc3 {
-    fn ram_bytes(&self) -> &[u8] {
-        self.ram.bytes()
+    fn ram(&self) -> Option<&Ram> {
+        Some(&self.ram)
+    }
+
+    fn ram_mut(&mut self) -> Option<&mut Ram> {
+        Some(&mut self.ram)
     }
 
     fn read_rom(&self, address: u16) -> u8 {

@@ -20,6 +20,7 @@
 //! any monitor.
 
 mod audio;
+mod crt;
 mod game_controller;
 mod keyboard_input;
 mod overlay;
@@ -41,6 +42,7 @@ use crate::ppu::{SCREEN_HEIGHT, SCREEN_WIDTH};
 use crate::save::SaveFile;
 use crate::testbus::TestBus;
 use audio::Audio;
+use crt::{Crt, CrtMode};
 use game_controller::GameController;
 use overlay::Overlay;
 use stats::{FrameStats, GpuInfo};
@@ -88,6 +90,9 @@ enum Action {
     TogglePause,
     ToggleOverlay,
     ToggleVsync,
+    /// Steps to the next CRT effect. A cycle rather than a toggle because there will be
+    /// more than two modes.
+    CycleCrtMode,
     Quit,
 }
 
@@ -133,6 +138,8 @@ pub fn run(
         vsync: true,
         cycle_started: Instant::now(),
         overlay: None,
+        crt: None,
+        crt_mode: CrtMode::default(),
         exit_after,
     };
     if let Some(audio) = app.audio.as_ref() {
@@ -201,6 +208,14 @@ struct App {
     /// `None` until the window exists, since it needs the surface format and the GPU
     /// device that come with it.
     overlay: Option<Overlay>,
+    /// The CRT pass's GPU resources, likewise `None` until the surface exists.
+    ///
+    /// Built whatever the mode, so F3 takes effect on the next frame rather than paying
+    /// for a pipeline and a texture at the moment it is pressed.
+    crt: Option<Crt>,
+    /// Which effect is showing. Kept here rather than inside [`Crt`] for the same reason
+    /// `vsync` is: it is a setting that outlives the window's resources.
+    crt_mode: CrtMode,
     /// Exit automatically after this many frames. Used to verify pacing without a
     /// human closing the window.
     exit_after: Option<u64>,
@@ -223,6 +238,9 @@ impl App {
                 }
             }
             Action::ToggleVsync => self.set_vsync(!self.vsync),
+            // Only the flag changes: the mode decides whether the pass runs, and the
+            // resources it needs were built with the window.
+            Action::CycleCrtMode => self.crt_mode = self.crt_mode.next(),
             Action::Quit => event_loop.exit(),
         }
     }
@@ -268,13 +286,16 @@ impl App {
         }
     }
 
-    /// Draws the emulated screen and, if it is showing, the overlay on top.
+    /// Draws the emulated screen, the CRT effect if one is on, and the overlay on top.
     ///
-    /// Both go through a single `render_with` call: `pixels` scales the framebuffer
-    /// into the surface, then egui draws over the result. The borrows are split out
-    /// into locals before the closure because `render_with` takes `&self` on `pixels`
-    /// while the overlay needs `&mut` — naming the fields separately is what lets the
-    /// borrow checker see they do not overlap.
+    /// All three go through a single `render_with` call. The borrows are split out into
+    /// locals before the closure because `render_with` takes `&self` on `pixels` while
+    /// the overlay needs `&mut` — naming the fields separately is what lets the borrow
+    /// checker see they do not overlap.
+    ///
+    /// Order matters twice over. The effect has to come after the scaler, since it reads
+    /// what the scaler drew; and the overlay has to come after the effect, or the debug
+    /// text gets striped along with the picture.
     fn render(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let (Some(pixels), Some(window)) = (self.pixels.as_ref(), self.window.as_ref()) else {
             return Ok(());
@@ -284,15 +305,44 @@ impl App {
         let stats = &self.stats;
 
         if let Some(overlay) = overlay {
-            overlay.prepare(window, pixels.device(), pixels.queue(), stats, self.vsync);
+            overlay.prepare(
+                window,
+                pixels.device(),
+                pixels.queue(),
+                stats,
+                self.vsync,
+                self.crt_mode,
+            );
             overlay.upload(pixels.device(), pixels.queue());
         }
 
         // Re-borrow immutably for the closure; the `&mut` phase is done by now.
         let overlay = self.overlay.as_ref();
+        let mode = self.crt_mode;
+        let crt = self.crt.as_ref().filter(|_| mode.needs_pass());
+
+        if let Some(crt) = crt {
+            // The scaler's clip rect is where the picture sits inside the surface, which
+            // is what the shader needs to leave the borders alone. Written before the
+            // closure rather than inside it, alongside the overlay's own upload, so all
+            // the queue traffic for the frame happens in one place.
+            crt.prepare(
+                pixels.queue(),
+                pixels.context().scaling_renderer.clip_rect(),
+            );
+        }
 
         pixels.render_with(|encoder, target, context| {
-            context.scaling_renderer.render(encoder, target);
+            match crt {
+                // With an effect on, the scaler draws into the intermediate texture and
+                // the effect pass is what writes the surface.
+                Some(crt) => {
+                    context.scaling_renderer.render(encoder, crt.source_view());
+                    crt.render(encoder, target);
+                }
+                // Off: straight to the surface, no intermediate and no second pass.
+                None => context.scaling_renderer.render(encoder, target),
+            }
 
             if let Some(overlay) = overlay
                 && overlay.has_content()
@@ -377,6 +427,14 @@ impl ApplicationHandler for App {
             self.stats
                 .set_gpu(GpuInfo::from_adapter_info(&pixels.adapter().get_info()));
 
+            // The effect's intermediate texture has to match the surface's format, since
+            // the scaler's own pipeline will only render into that format.
+            self.crt = Some(Crt::new(
+                pixels.device(),
+                pixels.surface_texture_format(),
+                physical,
+            ));
+
             self.overlay = Some(Overlay::new(
                 &window,
                 pixels.device(),
@@ -416,6 +474,11 @@ impl ApplicationHandler for App {
                 {
                     eprintln!("error: resize failed: {err}");
                     event_loop.exit();
+                }
+                // The effect's intermediate texture mirrors the surface, so it has to be
+                // rebuilt at the new size or the final blit would be scaled.
+                if let (Some(crt), Some(pixels)) = (self.crt.as_mut(), self.pixels.as_ref()) {
+                    crt.resize(pixels.device(), size);
                 }
                 // egui lays out in logical points, so it needs both the new size and
                 // the scale factor; missing the latter is how text ends up the wrong
@@ -564,6 +627,7 @@ impl ApplicationHandler for App {
     /// GPU device `pixels` owns, and `pixels`' surface borrows the window.
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
         self.overlay = None;
+        self.crt = None;
         self.pixels = None;
         self.window = None;
     }

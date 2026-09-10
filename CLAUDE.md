@@ -59,6 +59,27 @@ subsystems. Verify against the actual tree before assuming anything here is stil
   *emulator*, never about the emulated machine, so nothing here belongs in the core. `overlay.rs` is
   the egui debug panel, hidden by default and toggled with F1.
 
+  `crt.rs` + `crt.wgsl` are the display post-process, cycled with F3 (`CrtMode`: `Off`, `Scanlines`).
+  With an effect on, `ScalingRenderer::render` is pointed at an intermediate texture instead of the
+  surface — it takes any texture view, which is what makes this possible without forking `pixels` —
+  and the CRT pass reads that back and writes the surface. `Off` skips both, so a feature that is
+  switched off costs a branch, not a pass. Three things there are easy to get wrong:
+
+  - **The period comes from the scaler's `clip_rect()`, not the window.** The scaler letterboxes to
+    hold 10:9, so dividing the window height by 144 puts the stripes out of step with the lines.
+  - **`@builtin(position)` is the pixel *centre*** (`row + 0.5`). Subtract the half-pixel or the
+    cosine is sampled half a row out of step; at the usual four rows per line it lands on ±π/4 every
+    time, never reaches its extremes, and the profile degenerates into a square wave at about half
+    the `strength` asked for. Verified against a screenshot: anchored to the row it measures
+    bright/mid/dark/mid, which is the shape a beam had.
+  - **The maths happens in linear space, not sRGB**, because the surface format is sRGB and wgpu
+    converts on both the sample and the write. That is what you want, and it means the brightness
+    compensation clips highlights — measured output matched a linear-space model to within 0.2/255.
+
+  The mask is a cosine rather than an every-other-row test because the period is fractional whenever
+  the window is not an exact multiple of 144 tall, and a step function beats against the pixel grid
+  into bands that crawl as you resize. Below two rows per line the effect is skipped entirely.
+
   `stats.rs` also holds `GpuInfo`, the one thing there that is not a measurement: which adapter
   `pixels` settled on, whether it is hardware or a CPU rasteriser (`GpuKind::Software` — llvmpipe,
   lavapipe), the driver, and the backend. Read once in `resumed` because an adapter cannot change

@@ -25,6 +25,7 @@ use egui_winit::State;
 use winit::window::Window;
 
 use super::Action;
+use super::crt::CrtMode;
 use super::stats::{FrameStats, GpuInfo};
 
 /// egui's context, its winit input translation, and its wgpu renderer.
@@ -128,6 +129,7 @@ impl Overlay {
         queue: &wgpu::Queue,
         stats: &FrameStats,
         vsync: bool,
+        crt_mode: CrtMode,
     ) {
         if !self.visible {
             self.paint_jobs.clear();
@@ -138,9 +140,9 @@ impl Overlay {
         // it up through `take_request` — the same one-way flow the input devices use.
         let mut request = None;
         let input = self.state.take_egui_input(window);
-        let output = self
-            .context
-            .run_ui(input, |ui| stats_panel(ui, stats, vsync, &mut request));
+        let output = self.context.run_ui(input, |ui| {
+            stats_panel(ui, stats, vsync, crt_mode, &mut request)
+        });
         self.request = request;
 
         self.state
@@ -228,7 +230,13 @@ impl Overlay {
 ///
 /// Free function rather than a method so it borrows nothing but what it draws.
 /// `request` is how a click gets back out to the caller.
-fn stats_panel(ui: &mut egui::Ui, stats: &FrameStats, vsync: bool, request: &mut Option<Action>) {
+fn stats_panel(
+    ui: &mut egui::Ui,
+    stats: &FrameStats,
+    vsync: bool,
+    crt_mode: CrtMode,
+    request: &mut Option<Action>,
+) {
     let timing = stats.timing();
 
     egui::Window::new("Stats")
@@ -333,6 +341,19 @@ fn stats_panel(ui: &mut egui::Ui, stats: &FrameStats, vsync: bool, request: &mut
             {
                 *request = Some(Action::ToggleVsync);
             }
+
+            // A button showing the current mode rather than a checkbox, because this is
+            // a cycle: clicking steps to the next one, exactly as F3 does.
+            ui.horizontal(|ui| {
+                ui.label("CRT");
+                if ui
+                    .button(crt_mode.label())
+                    .on_hover_text("Cycles the display effect. Same as F3.")
+                    .clicked()
+                {
+                    *request = Some(Action::CycleCrtMode);
+                }
+            });
 
             ui.separator();
 

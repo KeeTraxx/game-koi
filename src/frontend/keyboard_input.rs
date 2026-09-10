@@ -32,8 +32,9 @@ pub fn map_key(key: KeyCode) -> Option<Button> {
 
 /// Turns a key event into the action it should trigger, if any.
 ///
-/// Escape, P, F1 and F2 are host-side controls: the emulated machine never sees them,
-/// because the DMG had no such buttons. Everything else falls through to [`map_key`].
+/// Escape, P, F1, F2 and F3 are host-side controls: the emulated machine never sees
+/// them, because the DMG had no such buttons. Everything else falls through to
+/// [`map_key`].
 pub fn action_for(key: KeyCode, state: ElementState) -> Option<Action> {
     if state == ElementState::Pressed {
         match key {
@@ -41,6 +42,7 @@ pub fn action_for(key: KeyCode, state: ElementState) -> Option<Action> {
             KeyCode::KeyP => return Some(Action::TogglePause),
             KeyCode::F1 => return Some(Action::ToggleOverlay),
             KeyCode::F2 => return Some(Action::ToggleVsync),
+            KeyCode::F3 => return Some(Action::CycleCrtMode),
             _ => {}
         }
     }
@@ -92,6 +94,17 @@ mod tests {
 
         // Host controls fire on the press only; the release is not a second toggle.
         assert_eq!(action_for(KeyCode::KeyP, ElementState::Released), None);
+    }
+
+    #[test]
+    fn f3_steps_the_crt_effect_on_the_press_only() {
+        // A cycle, so a release that also fired would skip a mode on every keypress.
+        assert_eq!(
+            action_for(KeyCode::F3, ElementState::Pressed),
+            Some(Action::CycleCrtMode)
+        );
+        assert_eq!(action_for(KeyCode::F3, ElementState::Released), None);
+        assert!(map_key(KeyCode::F3).is_none());
     }
 
     #[test]

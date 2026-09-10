@@ -43,7 +43,7 @@ use crate::testbus::TestBus;
 use audio::Audio;
 use game_controller::GameController;
 use overlay::Overlay;
-use stats::FrameStats;
+use stats::{FrameStats, GpuInfo};
 
 /// How long one emulated frame should take on the wall clock.
 ///
@@ -372,6 +372,11 @@ impl ApplicationHandler for App {
         // The overlay borrows the device and surface format that `pixels` just
         // created, so it can only be built now.
         if let Some(pixels) = self.pixels.as_ref() {
+            // Which adapter `pixels` settled on is only knowable now, and cannot change
+            // under a live surface, so it is read once rather than polled per frame.
+            self.stats
+                .set_gpu(GpuInfo::from_adapter_info(&pixels.adapter().get_info()));
+
             self.overlay = Some(Overlay::new(
                 &window,
                 pixels.device(),

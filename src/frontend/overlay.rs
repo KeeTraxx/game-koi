@@ -25,7 +25,7 @@ use egui_winit::State;
 use winit::window::Window;
 
 use super::Action;
-use super::stats::FrameStats;
+use super::stats::{FrameStats, GpuInfo};
 
 /// egui's context, its winit input translation, and its wgpu renderer.
 pub struct Overlay {
@@ -333,7 +333,76 @@ fn stats_panel(ui: &mut egui::Ui, stats: &FrameStats, vsync: bool, request: &mut
             {
                 *request = Some(Action::ToggleVsync);
             }
+
+            ui.separator();
+
+            gpu_section(ui, stats.gpu());
         });
+}
+
+/// What is drawing, and whether a GPU is involved at all.
+///
+/// Static facts rather than measurements, so there is no column jitter to guard against
+/// here. Software rendering is the figure worth noticing: a CPU rasteriser will scale a
+/// 160x144 framebuffer happily enough and then show up as render time the moment the
+/// overlay's text has to be composited, and none of the timings above say why.
+fn gpu_section(ui: &mut egui::Ui, gpu: Option<&GpuInfo>) {
+    let Some(gpu) = gpu else {
+        // Only reachable if the panel is somehow drawn before the surface exists.
+        ui.label("GPU: not known yet");
+        return;
+    };
+
+    egui::Grid::new("gpu_grid")
+        .num_columns(2)
+        .spacing([12.0, 2.0])
+        .show(ui, |ui| {
+            ui.label("Rendering");
+            let colour = match gpu.kind.accelerated() {
+                // Not an error — a CPU rasteriser may well keep up with a DMG — but it
+                // is the explanation for a frame breakdown that makes no sense on
+                // hardware this fast, so it is worth drawing the eye.
+                Some(false) => egui::Color32::YELLOW,
+                Some(true) | None => ui.visuals().text_color(),
+            };
+            ui.colored_label(colour, gpu.kind.label());
+            ui.end_row();
+
+            ui.label("Device");
+            // Adapter names run long ("NVIDIA GeForce RTX 3070 Ti Laptop GPU") and would
+            // widen the whole panel, so the row is cut short and the tooltip has it all.
+            ui.label(shorten(&gpu.device, DEVICE_NAME_CHARS))
+                .on_hover_text(&gpu.device);
+            ui.end_row();
+
+            ui.label("Driver");
+            ui.label(shorten(&gpu.driver, DEVICE_NAME_CHARS))
+                .on_hover_text(&gpu.driver);
+            ui.end_row();
+
+            ui.label("Backend");
+            ui.label(gpu.backend);
+            ui.end_row();
+        });
+}
+
+/// How much of a device or driver name to show before cutting it short.
+const DEVICE_NAME_CHARS: usize = 24;
+
+/// Cuts `text` down to `max` characters, marking where it was cut.
+///
+/// Counts characters rather than bytes: the string comes from a driver and nothing
+/// promises it is ASCII, and slicing a `&str` mid-codepoint panics.
+fn shorten(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    // One character of the budget goes to the ellipsis, so the result is never wider
+    // than `max` — which is the whole point of having a budget.
+    text.chars()
+        .take(max.saturating_sub(1))
+        .chain(['…'])
+        .collect()
 }
 
 /// A duration in milliseconds, at a fixed width so the column does not jitter.
@@ -356,5 +425,34 @@ fn load_colour(ui: &egui::Ui, fraction: f64) -> egui::Color32 {
         egui::Color32::YELLOW
     } else {
         ui.visuals().text_color()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_short_name_is_left_alone() {
+        assert_eq!(shorten("Vulkan", 24), "Vulkan");
+        // Exactly at the limit still fits; the cut is for names *over* it.
+        assert_eq!(shorten("123456", 6), "123456");
+    }
+
+    #[test]
+    fn a_long_name_is_cut_to_the_budget_including_the_ellipsis() {
+        let shortened = shorten("NVIDIA GeForce RTX 3070 Ti Laptop GPU", 24);
+        assert_eq!(shortened.chars().count(), 24, "the budget is a hard width");
+        assert!(shortened.ends_with('…'));
+        assert!(shortened.starts_with("NVIDIA GeForce"));
+    }
+
+    #[test]
+    fn shortening_never_splits_a_character() {
+        // A driver string is not promised to be ASCII, and slicing a &str mid-codepoint
+        // panics — so this has to count chars, not bytes.
+        let shortened = shorten("Intel® UHD Graphics — Alder Lake", 8);
+        assert_eq!(shortened.chars().count(), 8);
+        assert_eq!(shortened, "Intel® …");
     }
 }

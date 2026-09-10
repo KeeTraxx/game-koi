@@ -28,8 +28,20 @@
 //! fraction of the frame and reads as comfortable no matter how bad things get. The
 //! total is measured deadline-to-deadline instead, and the phases are accumulated
 //! into it.
+//!
+//! # Why the adapter belongs here too
+//!
+//! [`GpuInfo`] is the one thing in this module that is not a measurement: it is read
+//! once and never changes. It sits next to the timings because it is the first thing
+//! to check when they look wrong, and nothing in the frame breakdown says it. Only the
+//! plain description is kept — no wgpu handles — so the module still needs no GPU to
+//! test.
 
 use std::time::{Duration, Instant};
+
+// The same wgpu `pixels` is built on, re-exported by it. Only the adapter's
+// self-description is touched here, which is plain data.
+use pixels::wgpu::{AdapterInfo, Backend, DeviceType};
 
 /// How long to gather frames before recomputing the rate.
 ///
@@ -76,6 +88,110 @@ impl FrameTiming {
     }
 }
 
+/// What sort of device the adapter turned out to be.
+///
+/// The distinction that earns this its own type is the last one: `Software` means there
+/// is no GPU in the picture at all and a CPU rasteriser is drawing every pixel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GpuKind {
+    Discrete,
+    Integrated,
+    /// Paravirtualised — a guest's view of a host GPU, so hardware underneath.
+    Virtual,
+    /// A CPU rasteriser: llvmpipe or lavapipe on Linux, WARP on Windows.
+    Software,
+    /// The adapter declined to say, which is wgpu's `DeviceType::Other`.
+    Unknown,
+}
+
+impl GpuKind {
+    /// Whether a GPU is doing the work.
+    ///
+    /// `None` when the adapter would not say, which is worth keeping distinct from a
+    /// confident "no": reporting software rendering because a driver was reticent would
+    /// send someone chasing a problem they do not have.
+    pub fn accelerated(self) -> Option<bool> {
+        match self {
+            GpuKind::Discrete | GpuKind::Integrated | GpuKind::Virtual => Some(true),
+            GpuKind::Software => Some(false),
+            GpuKind::Unknown => None,
+        }
+    }
+
+    /// How to name it in the panel.
+    pub fn label(self) -> &'static str {
+        match self {
+            GpuKind::Discrete => "discrete GPU",
+            GpuKind::Integrated => "integrated GPU",
+            GpuKind::Virtual => "virtual GPU",
+            GpuKind::Software => "software (CPU)",
+            GpuKind::Unknown => "unknown",
+        }
+    }
+}
+
+/// Which device is drawing the frames, and through which driver.
+///
+/// Read once from the wgpu adapter when the surface is created — an adapter cannot
+/// change under a live surface, so there is nothing to poll per frame.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GpuInfo {
+    /// The adapter's own name for itself, e.g. "NVIDIA GeForce RTX 3070 Ti Laptop GPU".
+    pub device: String,
+    /// Whether real graphics hardware is involved, and of what sort.
+    pub kind: GpuKind,
+    /// The graphics API wgpu chose to talk to the device through.
+    pub backend: &'static str,
+    /// Driver name and version, as the adapter reports them.
+    pub driver: String,
+}
+
+impl GpuInfo {
+    /// Reads the facts out of a wgpu adapter's self-description.
+    ///
+    /// Both enums are matched exhaustively on purpose: neither is `#[non_exhaustive]`,
+    /// so a new wgpu variant breaks the build here rather than being quietly folded into
+    /// "unknown" and misreporting what the machine is doing.
+    pub fn from_adapter_info(info: &AdapterInfo) -> Self {
+        GpuInfo {
+            device: info.name.clone(),
+            kind: match info.device_type {
+                DeviceType::DiscreteGpu => GpuKind::Discrete,
+                DeviceType::IntegratedGpu => GpuKind::Integrated,
+                DeviceType::VirtualGpu => GpuKind::Virtual,
+                DeviceType::Cpu => GpuKind::Software,
+                DeviceType::Other => GpuKind::Unknown,
+            },
+            // wgpu's own names are lowercase identifiers (`dx12`, `gl`); these are for
+            // a person to read.
+            backend: match info.backend {
+                Backend::Vulkan => "Vulkan",
+                Backend::Metal => "Metal",
+                Backend::Dx12 => "Direct3D 12",
+                Backend::Gl => "OpenGL",
+                Backend::BrowserWebGpu => "WebGPU",
+                Backend::Noop => "none",
+            },
+            driver: join_driver(&info.driver, &info.driver_info),
+        }
+    }
+}
+
+/// Joins a driver's name and version, tolerating either being missing.
+///
+/// Which of the two an adapter fills in is entirely up to it: Mesa sets both ("radv",
+/// "Mesa 25.2.1"), NVIDIA's proprietary driver reports its version in `driver_info`, and
+/// some report neither. Formatting them with a fixed separator leaves a stray space or a
+/// bare version number on display, so the empty cases are handled explicitly.
+fn join_driver(name: &str, version: &str) -> String {
+    match (name.trim(), version.trim()) {
+        ("", "") => "unknown".to_string(),
+        ("", version) => version.to_string(),
+        (name, "") => name.to_string(),
+        (name, version) => format!("{name} {version}"),
+    }
+}
+
 /// Rolling performance counters, recomputed roughly twice a second.
 pub struct FrameStats {
     /// Frames completed since the current sampling window opened.
@@ -103,6 +219,9 @@ pub struct FrameStats {
     late_frames: u64,
     /// Frames run in total, so the late count can be read as a proportion.
     total_frames: u64,
+    /// What is drawing the frames. `None` until the surface exists, since there is no
+    /// adapter to ask before then — the counters start before the window does.
+    gpu: Option<GpuInfo>,
 }
 
 impl FrameStats {
@@ -117,7 +236,18 @@ impl FrameStats {
             pending_sleep: Duration::ZERO,
             late_frames: 0,
             total_frames: 0,
+            gpu: None,
         }
+    }
+
+    /// Records what the surface ended up rendering on, once that is known.
+    pub fn set_gpu(&mut self, gpu: GpuInfo) {
+        self.gpu = Some(gpu);
+    }
+
+    /// What is drawing the frames, or `None` before the surface exists.
+    pub fn gpu(&self) -> Option<&GpuInfo> {
+        self.gpu.as_ref()
     }
 
     /// Records how long emulating this frame took.
@@ -345,6 +475,86 @@ mod tests {
         // should read as 50%, not 50 fps.
         stats.fps = 29.8635;
         assert!((stats.speed_percent(59.727) - 50.0).abs() < 0.1);
+    }
+
+    /// An adapter's self-description, with the fields this module reads filled in.
+    ///
+    /// `AdapterInfo` is plain data with public fields, so this needs no GPU at all.
+    fn adapter_info(name: &str, device_type: DeviceType) -> AdapterInfo {
+        AdapterInfo {
+            name: name.to_string(),
+            vendor: 0,
+            device: 0,
+            device_type,
+            device_pci_bus_id: String::new(),
+            driver: "radv".to_string(),
+            driver_info: "Mesa 25.2.1".to_string(),
+            backend: Backend::Vulkan,
+            // Nothing here reads these; they are listed because `AdapterInfo` has no
+            // `Default`, so a wgpu upgrade that adds a field breaks this helper and
+            // nothing else.
+            subgroup_min_size: 32,
+            subgroup_max_size: 32,
+            transient_saves_memory: false,
+        }
+    }
+
+    #[test]
+    fn a_cpu_adapter_is_reported_as_not_accelerated() {
+        // The case the whole type exists for: llvmpipe and lavapipe report themselves as
+        // `Cpu`, and that is the answer to "why is the render phase so large".
+        let info = GpuInfo::from_adapter_info(&adapter_info("llvmpipe", DeviceType::Cpu));
+        assert_eq!(info.kind, GpuKind::Software);
+        assert_eq!(info.kind.accelerated(), Some(false));
+    }
+
+    #[test]
+    fn real_hardware_is_reported_as_accelerated() {
+        for device_type in [
+            DeviceType::DiscreteGpu,
+            DeviceType::IntegratedGpu,
+            DeviceType::VirtualGpu,
+        ] {
+            let info = GpuInfo::from_adapter_info(&adapter_info("gpu", device_type));
+            assert_eq!(
+                info.kind.accelerated(),
+                Some(true),
+                "{device_type:?} has hardware behind it"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unspecific_adapter_is_neither_yes_nor_no() {
+        // `Other` means the driver would not say. Guessing "software" here would send
+        // someone chasing a problem they do not have.
+        let info = GpuInfo::from_adapter_info(&adapter_info("?", DeviceType::Other));
+        assert_eq!(info.kind, GpuKind::Unknown);
+        assert_eq!(info.kind.accelerated(), None);
+    }
+
+    #[test]
+    fn the_backend_is_named_for_a_person_to_read() {
+        let info = GpuInfo::from_adapter_info(&adapter_info("gpu", DeviceType::DiscreteGpu));
+        // wgpu's own name for this is the lowercase identifier "vulkan".
+        assert_eq!(info.backend, "Vulkan");
+    }
+
+    #[test]
+    fn driver_name_and_version_are_joined_without_stray_separators() {
+        // Which of the two an adapter fills in varies by driver, so all four
+        // combinations have to read properly.
+        assert_eq!(join_driver("radv", "Mesa 25.2.1"), "radv Mesa 25.2.1");
+        assert_eq!(join_driver("NVIDIA", ""), "NVIDIA");
+        assert_eq!(join_driver("", "610.57.04"), "610.57.04");
+        assert_eq!(join_driver("", ""), "unknown");
+    }
+
+    #[test]
+    fn the_gpu_is_unknown_until_the_surface_exists() {
+        // The counters are constructed before the window, so the panel has to cope with
+        // there being no adapter to describe yet.
+        assert!(FrameStats::new().gpu().is_none());
     }
 
     #[test]

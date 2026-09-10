@@ -59,6 +59,14 @@ subsystems. Verify against the actual tree before assuming anything here is stil
   *emulator*, never about the emulated machine, so nothing here belongs in the core. `overlay.rs` is
   the egui debug panel, hidden by default and toggled with F1.
 
+  `stats.rs` also holds `GpuInfo`, the one thing there that is not a measurement: which adapter
+  `pixels` settled on, whether it is hardware or a CPU rasteriser (`GpuKind::Software` — llvmpipe,
+  lavapipe), the driver, and the backend. Read once in `resumed` because an adapter cannot change
+  under a live surface. Only the description is kept, no wgpu handles, so the module still needs no
+  GPU to test — and the `DeviceType`/`Backend` matches are exhaustive on purpose, since neither enum
+  is `#[non_exhaustive]` and a new variant should break the build rather than be folded into
+  "unknown". The software case is unit-tested only; there is no lavapipe here to try it against.
+
   **A "late" frame is not a dropped one**: every frame the PPU completes is drawn. Late means the
   cycle overran the 16.74 ms budget so the next frame started behind, which is the condition the
   pacing resync in `about_to_wait` already detects. Late also does not imply the machine is too

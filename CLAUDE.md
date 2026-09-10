@@ -50,11 +50,36 @@ subsystems. Verify against the actual tree before assuming anything here is stil
   and friends must not, since Blargg's ROMs write their results into SRAM. **MBC3's RTC is not persisted.**
 - `src/joypad.rs` — P1. All the active-low inversion lives here; the public API is plain
   `press`/`release`. Selecting a button group means writing its select bit **low**.
-- `src/frontend/` — window, input, audio out, frame pacing (winit + pixels + gilrs + cpal). The only module outside the
+- `src/frontend/` — window, input, audio out, frame pacing (winit + pixels + gilrs + cpal + egui). The only module outside the
   emulated machine; the core never depends on it, which is what keeps `--test` and `--screenshot`
   headless. `mod.rs` holds the window, the palette, pacing, and the `Action` enum both input devices
   emit; `keyboard_input.rs` and `game_controller.rs` are pure per-device translation to `Action`, so
-  both are unit-testable with no window and no gamepad attached. Gamepads are drained once per frame
+  both are unit-testable with no window and no gamepad attached. `stats.rs` holds the host-side
+  performance counters (rolling FPS, frame time, late frames) — all wall-clock facts about the
+  *emulator*, never about the emulated machine, so nothing here belongs in the core. `overlay.rs` is
+  the egui debug panel, hidden by default and toggled with F1.
+
+  **A "late" frame is not a dropped one**: every frame the PPU completes is drawn. Late means the
+  cycle overran the 16.74 ms budget so the next frame started behind, which is the condition the
+  pacing resync in `about_to_wait` already detects. Late also does not imply the machine is too
+  slow — with vsync on, the present call blocks until the compositor frees a swapchain image, and a
+  59.73 Hz emulator against a 60 Hz display drifts in and out of phase permanently, so frames go
+  late while the CPU is barely working. F2 toggles vsync (tearing is the trade).
+
+  **Frame time is split across two winit callbacks** — emulation in `about_to_wait`, drawing in
+  `RedrawRequested` — so a single span around either measures a fraction of the frame and reads as
+  comfortable no matter how bad things get. `stats.rs` times the phases separately and the total
+  deadline-to-deadline. The pacing sleep is tracked as its own phase precisely so it is *not*
+  counted as a stall: on a healthy frame it is ~14 ms of the 16.74, and lumping it in with blocking
+  makes idle look pathological. `blocked()` is what is left after work and sleep, and is the figure
+  worth watching. Measured on an i7-12800H: emulate ~2 ms, render ~0.8 ms — about 18% of budget.
+
+  **egui is pinned to 0.35, and must stay there while `pixels` is on 0.17.** The overlay borrows the
+  `wgpu::Device` and `Queue` that `pixels` owns rather than creating its own, so both must agree on
+  the wgpu version — `pixels` 0.17.2 uses wgpu 29, and egui-wgpu 0.36 moved to wgpu 30. Mismatching
+  them links two semver-incompatible wgpu crates and produces the memorably unhelpful error
+  "expected `wgpu::Device`, found `wgpu::Device`". `cargo tree -d` is the check. `wgpu` is not a
+  direct dependency: `overlay.rs` uses `egui_wgpu::wgpu`, so there is only one version to get wrong. Gamepads are drained once per frame
   in `about_to_wait` because gilrs keeps its own queue outside winit's event stream. `audio.rs` drains the
   APU's queue into cpal through a `Mutex<VecDeque>`; a missing sound device is not an error, it just runs
   silently.
@@ -177,8 +202,8 @@ Suggested order, each step ending somewhere runnable:
    count and scroll, and a scanline is drawn in one go on entering HBlank instead of pixel by pixel — so
    mid-scanline register changes are not modelled. Both are fine for games, not for Mooneye's PPU timing
    tests.
-5. ~~**Host frontend**~~ — done. winit 0.30 + pixels 0.17 + gilrs 0.11 + cpal 0.18 + dirs 7, the only
-   dependencies, all host-side. Paces on the emulator's own frame completion (59.73 Hz), not the host refresh rate.
+5. ~~**Host frontend**~~ — done. winit 0.30 + pixels 0.17 + gilrs 0.11 + cpal 0.18 + dirs 7 + egui 0.35
+   (with egui-wgpu/egui-winit, for the F1 stats overlay), the only dependencies, all host-side. Paces on the emulator's own frame completion (59.73 Hz), not the host refresh rate.
    Keyboard and gamepad are both live at once.
 6. ~~**MBC1 and beyond**~~ — done. `src/cartridge/mbc/`: MBC1 (+MBC1M), MBC2, MBC3 (+RTC), MBC5, plus
    battery-backed saves in `src/save.rs`. That covers essentially every commercial DMG and CGB cartridge.

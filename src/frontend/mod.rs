@@ -22,6 +22,8 @@
 mod audio;
 mod game_controller;
 mod keyboard_input;
+mod overlay;
+mod stats;
 
 use std::time::{Duration, Instant};
 
@@ -40,12 +42,17 @@ use crate::save::SaveFile;
 use crate::testbus::TestBus;
 use audio::Audio;
 use game_controller::GameController;
+use overlay::Overlay;
+use stats::FrameStats;
 
 /// How long one emulated frame should take on the wall clock.
 ///
 /// 70224 T-cycles at 4194304 Hz. Using the exact figure rather than 1/60 s keeps
 /// long sessions from drifting audibly once sound exists.
 const FRAME_TIME: Duration = Duration::from_nanos(16_742_706);
+
+/// The same figure as a rate, for reporting speed as a percentage of real hardware.
+const TARGET_HZ: f64 = 59.727_5;
 
 /// How often to write the save file out, in frames — about two seconds.
 ///
@@ -79,6 +86,8 @@ enum Action {
     /// Host-side controls. Not buttons the DMG had, so the emulated machine never
     /// learns these happened.
     TogglePause,
+    ToggleOverlay,
+    ToggleVsync,
     Quit,
 }
 
@@ -120,6 +129,10 @@ pub fn run(
         paused: false,
         frames: 0,
         started: Instant::now(),
+        stats: FrameStats::new(),
+        vsync: true,
+        cycle_started: Instant::now(),
+        overlay: None,
         exit_after,
     };
     if let Some(audio) = app.audio.as_ref() {
@@ -173,6 +186,21 @@ struct App {
     /// Frames drawn and when we started, for the `--fps` sanity check.
     frames: u64,
     started: Instant,
+    /// Rolling performance counters, shown by the overlay.
+    stats: FrameStats,
+    /// Whether the surface waits for the display before presenting.
+    ///
+    /// On by default, as `pixels` configures it. Worth being able to turn off: the
+    /// emulator paces itself at 59.73 Hz while the display refreshes at some other
+    /// rate, so the two drift in and out of phase and the present call periodically
+    /// blocks for a whole refresh — which shows up as late frames on a machine that
+    /// is barely working. Off trades tearing for that.
+    vsync: bool,
+    /// When the current frame cycle began, for the deadline-to-deadline total.
+    cycle_started: Instant,
+    /// `None` until the window exists, since it needs the surface format and the GPU
+    /// device that come with it.
+    overlay: Option<Overlay>,
     /// Exit automatically after this many frames. Used to verify pacing without a
     /// human closing the window.
     exit_after: Option<u64>,
@@ -189,6 +217,12 @@ impl App {
             Action::Press(button) => self.bus.joypad.press(button, &mut self.bus.interrupts),
             Action::Release(button) => self.bus.joypad.release(button),
             Action::TogglePause => self.paused = !self.paused,
+            Action::ToggleOverlay => {
+                if let Some(overlay) = self.overlay.as_mut() {
+                    overlay.toggle();
+                }
+            }
+            Action::ToggleVsync => self.set_vsync(!self.vsync),
             Action::Quit => event_loop.exit(),
         }
     }
@@ -220,6 +254,56 @@ impl App {
         self.samples.clear();
         self.bus.apu.drain_samples(&mut self.samples);
         audio.queue(&self.samples);
+    }
+
+    /// Turns vsync on or off, reconfiguring the surface.
+    ///
+    /// Kept in step with `pixels` rather than read back from it, because the overlay
+    /// needs the flag every frame and `present_mode()` returns a wgpu enum that says
+    /// `AutoVsync` even when the platform quietly picked something else.
+    fn set_vsync(&mut self, enabled: bool) {
+        self.vsync = enabled;
+        if let Some(pixels) = self.pixels.as_mut() {
+            pixels.enable_vsync(enabled);
+        }
+    }
+
+    /// Draws the emulated screen and, if it is showing, the overlay on top.
+    ///
+    /// Both go through a single `render_with` call: `pixels` scales the framebuffer
+    /// into the surface, then egui draws over the result. The borrows are split out
+    /// into locals before the closure because `render_with` takes `&self` on `pixels`
+    /// while the overlay needs `&mut` — naming the fields separately is what lets the
+    /// borrow checker see they do not overlap.
+    fn render(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        let (Some(pixels), Some(window)) = (self.pixels.as_ref(), self.window.as_ref()) else {
+            return Ok(());
+        };
+
+        let overlay = self.overlay.as_mut();
+        let stats = &self.stats;
+
+        if let Some(overlay) = overlay {
+            overlay.prepare(window, pixels.device(), pixels.queue(), stats, self.vsync);
+            overlay.upload(pixels.device(), pixels.queue());
+        }
+
+        // Re-borrow immutably for the closure; the `&mut` phase is done by now.
+        let overlay = self.overlay.as_ref();
+
+        pixels.render_with(|encoder, target, context| {
+            context.scaling_renderer.render(encoder, target);
+
+            if let Some(overlay) = overlay
+                && overlay.has_content()
+            {
+                overlay.render(encoder, target);
+            }
+
+            Ok(())
+        })?;
+
+        Ok(())
     }
 
     /// Runs the emulator until the PPU completes a frame, then draws it.
@@ -285,11 +369,39 @@ impl ApplicationHandler for App {
             }
         }
 
+        // The overlay borrows the device and surface format that `pixels` just
+        // created, so it can only be built now.
+        if let Some(pixels) = self.pixels.as_ref() {
+            self.overlay = Some(Overlay::new(
+                &window,
+                pixels.device(),
+                pixels.surface_texture_format(),
+                physical,
+            ));
+        }
+
+        let want = self.vsync;
+        self.set_vsync(want);
         self.window = Some(window);
         self.next_frame = Instant::now();
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        // egui sees every event first and reports whether it wants it exclusively.
+        // Honouring that is what stops a click on an overlay widget from also being
+        // read as a Game Boy button press. While the overlay is hidden it consumes
+        // nothing, so this costs the emulator no input at all.
+        if let (Some(overlay), Some(window)) = (self.overlay.as_mut(), self.window.as_ref()) {
+            let window = window.clone();
+            if overlay.on_window_event(&window, &event) {
+                // Still honour a close request: egui must not be able to trap it.
+                if matches!(event, WindowEvent::CloseRequested) {
+                    event_loop.exit();
+                }
+                return;
+            }
+        }
+
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
 
@@ -299,6 +411,13 @@ impl ApplicationHandler for App {
                 {
                     eprintln!("error: resize failed: {err}");
                     event_loop.exit();
+                }
+                // egui lays out in logical points, so it needs both the new size and
+                // the scale factor; missing the latter is how text ends up the wrong
+                // size on a HiDPI display.
+                if let (Some(overlay), Some(window)) = (self.overlay.as_mut(), self.window.as_ref())
+                {
+                    overlay.resize(size, window.scale_factor() as f32);
                 }
             }
 
@@ -323,12 +442,15 @@ impl ApplicationHandler for App {
             }
 
             WindowEvent::RedrawRequested => {
-                if let Some(pixels) = self.pixels.as_ref()
-                    && let Err(err) = pixels.render()
-                {
+                // Timed here rather than folded into the frame's work: drawing happens
+                // in a different callback from emulation, so a span around either one
+                // alone measures a fraction of the frame.
+                let started = Instant::now();
+                if let Err(err) = self.render() {
                     eprintln!("error: render failed: {err}");
                     event_loop.exit();
                 }
+                self.stats.rendered(started.elapsed());
             }
 
             _ => {}
@@ -343,19 +465,43 @@ impl ApplicationHandler for App {
             self.apply(action, event_loop);
         }
 
+        // Anything the overlay's widgets asked for last frame. Applied here rather
+        // than mid-render because carrying it out can reconfigure the surface, which
+        // must not happen while a frame is being drawn into it.
+        if let Some(action) = self.overlay.as_mut().and_then(Overlay::take_request) {
+            self.apply(action, event_loop);
+        }
+
         // Sleep until the frame is due, then run it in this same callback. Sleeping
         // and returning instead would cost an extra event-loop round trip per frame,
         // which is enough to drag the rate well below the hardware's 59.73 Hz.
         let now = Instant::now();
+        let mut slept = Duration::ZERO;
         if now < self.next_frame {
             std::thread::sleep(self.next_frame - now);
+            // Measured rather than assumed: `sleep` guarantees only a lower bound, and
+            // the overshoot is the scheduler's, not ours. Counting the requested time
+            // would quietly hide a laggy scheduler in the blocked figure.
+            slept = now.elapsed();
         }
+        self.stats.slept(slept);
 
         if !self.paused {
+            // The emulation phase only. The render phase is timed in
+            // `RedrawRequested`, and the deadline-to-deadline total below covers both
+            // plus anything spent blocked.
+            let work_started = Instant::now();
             self.run_frame();
             self.drain_audio();
-            self.frames += 1;
+            self.stats.emulated(work_started.elapsed());
 
+            self.frames += 1;
+            // Close the frame against the previous cycle's start, so the total takes
+            // in the render that happened between the two and any wait it involved.
+            let now = Instant::now();
+            let total = now.duration_since(self.cycle_started);
+            self.cycle_started = now;
+            self.stats.frame_completed(total);
             // Start the clock after the first frame: creating the window and GPU
             // surface takes a few hundred milliseconds, and averaging that one-off
             // cost into a short run makes the frame rate look far worse than it is.
@@ -387,6 +533,10 @@ impl ApplicationHandler for App {
         self.next_frame += FRAME_TIME;
         let after = Instant::now();
         if self.next_frame < after {
+            // The deadline had already passed before we got here, so this frame's work
+            // overran its budget. Nothing was skipped — the frame was simply late, and
+            // resyncing here is what stops one slow frame compounding into drift.
+            self.stats.frame_was_late();
             self.next_frame = after + FRAME_TIME;
         }
 

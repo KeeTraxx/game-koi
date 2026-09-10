@@ -32,13 +32,15 @@ pub fn map_key(key: KeyCode) -> Option<Button> {
 
 /// Turns a key event into the action it should trigger, if any.
 ///
-/// Escape and P are host-side controls: the emulated machine never sees them, because
-/// the DMG had no such buttons. Everything else falls through to [`map_key`].
+/// Escape, P, F1 and F2 are host-side controls: the emulated machine never sees them,
+/// because the DMG had no such buttons. Everything else falls through to [`map_key`].
 pub fn action_for(key: KeyCode, state: ElementState) -> Option<Action> {
     if state == ElementState::Pressed {
         match key {
             KeyCode::Escape => return Some(Action::Quit),
             KeyCode::KeyP => return Some(Action::TogglePause),
+            KeyCode::F1 => return Some(Action::ToggleOverlay),
+            KeyCode::F2 => return Some(Action::ToggleVsync),
             _ => {}
         }
     }

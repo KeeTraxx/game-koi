@@ -21,7 +21,7 @@ fn run_rom(rom: &Path) -> Option<String> {
         return None;
     }
 
-    let binary = env!("CARGO_BIN_EXE_gbemu-rs");
+    let binary = env!("CARGO_BIN_EXE_game-koi");
     let output = Command::new(binary)
         .arg(rom)
         .arg("--test")

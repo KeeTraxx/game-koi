@@ -18,7 +18,7 @@ use cartridge::Cartridge;
 use cpu::Cpu;
 use testbus::TestBus;
 
-const USAGE: &str = "usage: gbemu-rs <rom.gb> [--info | --trace [steps] | --test | --mooneye \
+const USAGE: &str = "usage: game-koi <rom.gb> [--info | --trace [steps] | --test | --mooneye \
                      | --screenshot [frames] | --frames [n]]";
 
 /// What the binary was asked to do.

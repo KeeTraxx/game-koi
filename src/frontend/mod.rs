@@ -258,7 +258,7 @@ impl ApplicationHandler for App {
             SCREEN_HEIGHT as u32 * self.scale,
         );
         let attributes = Window::default_attributes()
-            .with_title(format!("gbemu-rs — {}", self.title))
+            .with_title(format!("game-koi — {}", self.title))
             .with_inner_size(size)
             .with_min_inner_size(winit::dpi::LogicalSize::new(
                 SCREEN_WIDTH as u32,

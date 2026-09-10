@@ -44,7 +44,7 @@ subsystems. Verify against the actual tree before assuming anything here is stil
   finished stereo samples into a bounded queue; the core never talks to an audio device.
 - `src/save.rs` — battery-backed saves. Only for cartridges whose header says they have a battery: RAM on
   a battery-less board is volatile on hardware too, so persisting it would invent a memory the cartridge
-  never had. Files go in `dirs::data_dir()/gbemu-rs/<rom-stem>.sav` (data, not config — a save is
+  never had. Files go in `dirs::data_dir()/game-koi/<rom-stem>.sav` (data, not config — a save is
   generated state), are written through a temporary plus a rename so a crash cannot truncate one, and are
   autosaved every 120 frames when the RAM is dirty as well as on exit. Only the play path saves; `--test`
   and friends must not, since Blargg's ROMs write their results into SRAM. **MBC3's RTC is not persisted.**
@@ -97,6 +97,24 @@ Version control is **jj (Jujutsu)** colocated with git (both `.jj/` and `.git/` 
 ## Commands
 
 Rust 1.95, edition 2024.
+
+**System libraries.** Two host-side dependencies link against C libraries and need their `-dev` packages
+present at build time, not just the runtime library every desktop already has — without them `cargo build`
+fails in a build script with "Package … not found in the pkg-config search path", which reads like a Rust
+problem but isn't:
+
+- **ALSA** (`alsa-sys`, via `cpal`) — sound output.
+- **libudev** (`libudev-sys`, via `gilrs`) — how gilrs enumerates gamepads on Linux.
+
+On Debian/Ubuntu:
+
+```
+sudo apt install libasound2-dev libudev-dev pkg-config
+```
+
+Elsewhere: `alsa-lib-devel` + `systemd-devel` (Fedora), `alsa-lib` + `systemd-libs` (Arch), `alsa-devel` +
+`libudev-devel` (openSUSE). Neither is guarded by a Cargo feature, so both are required even for the
+headless modes (`--test`, `--mooneye`, `--screenshot`) and for `cargo test`.
 
 ```
 cargo run --release -- <rom.gb>   # play a ROM in a window

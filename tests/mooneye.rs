@@ -34,7 +34,7 @@ fn check(group: &str, name: &str) {
         return;
     }
 
-    let binary = env!("CARGO_BIN_EXE_gbemu-rs");
+    let binary = env!("CARGO_BIN_EXE_game-koi");
     let output = Command::new(binary)
         .arg(&rom)
         .arg("--mooneye")

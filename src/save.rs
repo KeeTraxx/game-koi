@@ -8,7 +8,7 @@
 //!
 //! # Where the files go
 //!
-//! `dirs::data_dir()`, plus `gbemu-rs/`. That resolves to the place each platform
+//! `dirs::data_dir()`, plus `game-koi/`. That resolves to the place each platform
 //! actually wants application data:
 //!
 //! | Platform | Directory |
@@ -71,7 +71,7 @@ impl SaveFile {
 
         let stem = cart.path().file_stem()?;
         let mut path = dirs::data_dir()?;
-        path.push("gbemu-rs");
+        path.push("game-koi");
         path.push(stem);
         path.set_extension("sav");
         Some(SaveFile { path })
@@ -190,7 +190,7 @@ mod tests {
         assert_eq!(save.path().extension().unwrap(), "sav");
         assert_eq!(save.path().file_stem().unwrap(), "zelda");
         assert!(
-            save.path().parent().unwrap().ends_with("gbemu-rs"),
+            save.path().parent().unwrap().ends_with("game-koi"),
             "saves belong in the application's own directory, got {}",
             save.path().display()
         );
@@ -207,7 +207,7 @@ mod tests {
     #[test]
     fn a_save_survives_a_round_trip() {
         let cart = cartridge(0x03, 0x02, "roundtrip.gb");
-        let directory = std::env::temp_dir().join(format!("gbemu-rs-test-{}", std::process::id()));
+        let directory = std::env::temp_dir().join(format!("game-koi-test-{}", std::process::id()));
         let save = SaveFile {
             path: directory.join("roundtrip.sav"),
         };
@@ -232,7 +232,7 @@ mod tests {
     fn a_missing_save_is_not_an_error() {
         let cart = cartridge(0x03, 0x02, "absent.gb");
         let save = SaveFile {
-            path: std::env::temp_dir().join("gbemu-rs-definitely-not-here.sav"),
+            path: std::env::temp_dir().join("game-koi-definitely-not-here.sav"),
         };
         let mut bus = TestBus::new(&cart).expect("MBC1 is supported");
         assert!(!save.load(&mut bus).expect("no file is fine"));

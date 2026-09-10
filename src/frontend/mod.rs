@@ -544,6 +544,24 @@ impl ApplicationHandler for App {
             window.request_redraw();
         }
     }
+
+    /// Releases everything tied to the window before the event loop shuts down.
+    ///
+    /// Not housekeeping — leaving this to `App`'s own drop is a segfault on every exit.
+    /// By the time `run_app` returns, winit has closed its connection to the display
+    /// server and freed it. egui-winit's clipboard is built on a *borrowed* Wayland
+    /// display pointer rather than a reference-counted handle, and dropping it signals a
+    /// worker thread which then destroys its protocol objects through that pointer — at
+    /// which point it is dangling. Dropping here puts the teardown back inside the event
+    /// loop's lifetime, while the connection is still open.
+    ///
+    /// The order is the reverse of how `resumed` builds them: the overlay borrows the
+    /// GPU device `pixels` owns, and `pixels`' surface borrows the window.
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        self.overlay = None;
+        self.pixels = None;
+        self.window = None;
+    }
 }
 
 #[cfg(test)]

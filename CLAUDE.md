@@ -79,7 +79,16 @@ subsystems. Verify against the actual tree before assuming anything here is stil
   the wgpu version — `pixels` 0.17.2 uses wgpu 29, and egui-wgpu 0.36 moved to wgpu 30. Mismatching
   them links two semver-incompatible wgpu crates and produces the memorably unhelpful error
   "expected `wgpu::Device`, found `wgpu::Device`". `cargo tree -d` is the check. `wgpu` is not a
-  direct dependency: `overlay.rs` uses `egui_wgpu::wgpu`, so there is only one version to get wrong. Gamepads are drained once per frame
+  direct dependency: `overlay.rs` uses `egui_wgpu::wgpu`, so there is only one version to get wrong.
+
+  **`App::exiting` is load-bearing, not housekeeping.** It drops the overlay, `pixels` and the
+  window while the event loop is still alive. Letting `App`'s own drop do it instead segfaults on
+  every exit under Wayland: by the time `run_app` returns, winit has disconnected and freed the
+  display, and egui-winit's clipboard is built on a *borrowed* Wayland display pointer rather than
+  a refcounted handle — dropping it joins a worker thread that then destroys its protocol objects
+  through that dangling pointer. Keep the order the reverse of `resumed`.
+
+  Gamepads are drained once per frame
   in `about_to_wait` because gilrs keeps its own queue outside winit's event stream. `audio.rs` drains the
   APU's queue into cpal through a `Mutex<VecDeque>`; a missing sound device is not an error, it just runs
   silently.

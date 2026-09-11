@@ -1,0 +1,26 @@
+[package]
+name = "game-koi-desktop"
+version.workspace = true
+edition.workspace = true
+
+# The binary keeps its old name, so `cargo run -- <rom.gb>` and the integration
+# tests that shell out to it carry on working unchanged.
+[[bin]]
+name = "game-koi"
+path = "src/main.rs"
+
+[dependencies]
+game-koi-core = { path = "../game-koi-core" }
+
+cpal = "0.18.2"
+dirs = "7.0.0"
+egui = "0.35"
+egui-wgpu = "0.35"
+egui-winit = "0.35"
+gilrs = "0.11.2"
+pixels = "0.17"
+winit = "0.30"
+
+[dev-dependencies]
+# The save tests build a fake multicart image, which needs the core's logo helper.
+game-koi-core = { path = "../game-koi-core", features = ["test-support"] }

@@ -25,6 +25,7 @@ use std::process::Command;
 
 fn check(group: &str, name: &str) {
     let rom = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
         .join("test-roms/mooneye")
         .join(group)
         .join(format!("{name}.gb"));

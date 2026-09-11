@@ -1,0 +1,11 @@
+[package]
+name = "game-koi-core"
+version.workspace = true
+edition.workspace = true
+
+[features]
+# Exposes test-only helpers (`header::write_logo_at`) to other crates' tests.
+# Off by default, so a normal build of the core does not ship them.
+test-support = []
+
+[dependencies]

@@ -33,6 +33,7 @@ fn run_rom(rom: &Path) -> Option<String> {
 
 fn check(name: &str) {
     let rom = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
         .join("test-roms/individual")
         .join(format!("{name}.gb"));
 
@@ -109,7 +110,9 @@ fn op_a_hl() {
 /// actually exercises bank switching: its runner switches banks to reach each test.
 #[test]
 fn cpu_instrs_combined() {
-    let rom = Path::new(env!("CARGO_MANIFEST_DIR")).join("test-roms/cpu_instrs.gb");
+    let rom = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join("test-roms/cpu_instrs.gb");
     let Some(output) = run_rom(&rom) else {
         eprintln!("skipping cpu_instrs: ROM not found");
         return;
@@ -127,6 +130,7 @@ fn cpu_instrs_combined() {
 /// both conventions, so this looks the same as any other check from here.
 fn check_sound(name: &str) {
     let rom = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
         .join("test-roms/dmg_sound")
         .join(format!("{name}.gb"));
 
@@ -210,7 +214,9 @@ fn sound_regs_after_power() {
 /// this exercises the CPU and timer together.
 #[test]
 fn instr_timing() {
-    let rom = Path::new(env!("CARGO_MANIFEST_DIR")).join("test-roms/instr_timing.gb");
+    let rom = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join("test-roms/instr_timing.gb");
     let Some(output) = run_rom(&rom) else {
         eprintln!("skipping instr_timing: ROM not found");
         return;

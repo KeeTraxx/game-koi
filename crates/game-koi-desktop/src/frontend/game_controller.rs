@@ -17,7 +17,7 @@
 use gilrs::{Axis, Button as PadButton, EventType, Gilrs};
 
 use super::Action;
-use crate::joypad::Button;
+use game_koi_core::joypad::Button;
 
 /// How far a stick must be pushed before it counts as a direction press.
 ///

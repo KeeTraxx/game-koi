@@ -37,8 +37,8 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::cartridge::Cartridge;
-use crate::testbus::TestBus;
+use game_koi_core::cartridge::Cartridge;
+use game_koi_core::testbus::TestBus;
 
 /// Where a cartridge's save RAM lives on disk.
 pub struct SaveFile {
@@ -153,8 +153,8 @@ impl SaveFile {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bus::Bus;
-    use crate::cartridge::header;
+    use game_koi_core::bus::Bus;
+    use game_koi_core::cartridge::header;
 
     /// A 32 KiB cartridge with the given type byte and RAM-size byte.
     fn cartridge(type_byte: u8, ram_size: u8, name: &str) -> Cartridge {

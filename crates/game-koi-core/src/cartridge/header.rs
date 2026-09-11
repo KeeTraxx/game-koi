@@ -298,7 +298,12 @@ pub fn has_logo_at(rom: &[u8], base: usize) -> bool {
 ///
 /// Test-only companion to [`has_logo_at`], so tests elsewhere can build an image that
 /// looks like a multicart without needing a copy of the logo bytes.
-#[cfg(test)]
+///
+/// "Elsewhere" now means another crate — `game-koi-desktop`'s save tests build such an
+/// image — and `#[cfg(test)]` only holds within the crate being tested. Hence the
+/// `test-support` feature: the desktop crate turns it on for its dev builds, so this
+/// stays absent from a normal release rather than becoming public API by accident.
+#[cfg(any(test, feature = "test-support"))]
 pub fn write_logo_at(rom: &mut [u8], base: usize) {
     let start = base + offset::LOGO;
     rom[start..start + NINTENDO_LOGO.len()].copy_from_slice(&NINTENDO_LOGO);

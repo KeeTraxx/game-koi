@@ -1,0 +1,13 @@
+[package]
+name = "game-koi-web"
+version.workspace = true
+edition.workspace = true
+
+# `cdylib` is what wasm-bindgen needs to produce a loadable module; `rlib` keeps
+# `cargo test` on the host working.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+game-koi-core = { path = "../game-koi-core" }
+wasm-bindgen = "0.2"

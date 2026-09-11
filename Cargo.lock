@@ -839,7 +839,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "game-koi"
+name = "game-koi-core"
+version = "0.1.0"
+
+[[package]]
+name = "game-koi-desktop"
 version = "0.1.0"
 dependencies = [
  "cpal",
@@ -847,9 +851,18 @@ dependencies = [
  "egui",
  "egui-wgpu",
  "egui-winit",
+ "game-koi-core",
  "gilrs",
  "pixels",
  "winit",
+]
+
+[[package]]
+name = "game-koi-web"
+version = "0.1.0"
+dependencies = [
+ "game-koi-core",
+ "wasm-bindgen",
 ]
 
 [[package]]

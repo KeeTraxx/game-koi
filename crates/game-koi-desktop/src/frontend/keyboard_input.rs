@@ -10,7 +10,7 @@ use winit::event::ElementState;
 use winit::keyboard::KeyCode;
 
 use super::Action;
-use crate::joypad::Button;
+use game_koi_core::joypad::Button;
 
 /// Maps a host key to a Game Boy button.
 ///

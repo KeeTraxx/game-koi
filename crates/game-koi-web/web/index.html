@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>game-koi</title>
+<style>
+  body {
+    background: #14181c; color: #c8d0d8;
+    font: 14px/1.5 ui-monospace, monospace;
+    display: flex; flex-direction: column; align-items: center;
+    gap: 1rem; padding: 2rem;
+  }
+  /* The DMG is 160x144; scale by whole numbers and turn off smoothing, or the
+     pixel grid turns to mush. */
+  canvas {
+    width: 640px; height: 576px;
+    image-rendering: pixelated;
+    background: #081820;
+    border: 1px solid #2a3238;
+  }
+  #status { min-height: 1.5em; color: #88c070; }
+  kbd { background: #2a3238; border-radius: 3px; padding: 0 4px; }
+</style>
+</head>
+<body>
+  <h1>game-koi</h1>
+  <input type="file" id="rom" accept=".gb">
+  <canvas id="screen" width="160" height="144"></canvas>
+  <div id="status">loading…</div>
+  <div>
+    <kbd>←↑→↓</kbd> d-pad · <kbd>Z</kbd> A · <kbd>X</kbd> B ·
+    <kbd>Enter</kbd> Start · <kbd>RShift</kbd> Select
+  </div>
+  <script type="module" src="./main.js"></script>
+</body>
+</html>

@@ -1,22 +1,12 @@
-mod apu;
-mod bus;
-mod cartridge;
-mod cpu;
 mod frontend;
-mod interrupts;
-mod joypad;
-mod ppu;
 mod save;
-mod serial;
-mod testbus;
-mod timer;
 
 use std::process::ExitCode;
 
-use bus::Bus;
-use cartridge::Cartridge;
-use cpu::Cpu;
-use testbus::TestBus;
+use game_koi_core::bus::Bus;
+use game_koi_core::cartridge::Cartridge;
+use game_koi_core::cpu::Cpu;
+use game_koi_core::testbus::TestBus;
 
 const USAGE: &str = "usage: game-koi <rom.gb> [--info | --trace [steps] | --test | --mooneye \
                      | --screenshot [frames] | --frames [n]]";
@@ -281,7 +271,7 @@ fn trace_execution(cart: &Cartridge, steps: usize) {
         );
         cpu.step(&mut bus);
 
-        if cpu.state != cpu::State::Running {
+        if cpu.state != game_koi_core::cpu::State::Running {
             println!("     ({:?}; nothing left to trace)", cpu.state);
             break;
         }
@@ -333,9 +323,18 @@ fn write_screenshot(cart: &Cartridge, frames: usize) -> ExitCode {
     };
 
     let _ = writeln!(file, "P2");
-    let _ = writeln!(file, "{} {}", ppu::SCREEN_WIDTH, ppu::SCREEN_HEIGHT);
+    let _ = writeln!(
+        file,
+        "{} {}",
+        game_koi_core::ppu::SCREEN_WIDTH,
+        game_koi_core::ppu::SCREEN_HEIGHT
+    );
     let _ = writeln!(file, "3");
-    for row in bus.ppu.framebuffer().chunks(ppu::SCREEN_WIDTH) {
+    for row in bus
+        .ppu
+        .framebuffer()
+        .chunks(game_koi_core::ppu::SCREEN_WIDTH)
+    {
         // Shade 0 is lightest, so invert for a viewer where 3 is white.
         let line: Vec<String> = row.iter().map(|s| (3 - s).to_string()).collect();
         let _ = writeln!(file, "{}", line.join(" "));

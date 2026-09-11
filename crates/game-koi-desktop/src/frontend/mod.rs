@@ -35,15 +35,15 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::PhysicalKey;
 use winit::window::{Window, WindowId};
 
-use crate::cartridge::Cartridge;
-use crate::cpu::Cpu;
-use crate::joypad::Button;
-use crate::ppu::{SCREEN_HEIGHT, SCREEN_WIDTH};
 use crate::save::SaveFile;
-use crate::testbus::TestBus;
 use audio::Audio;
 use crt::{Crt, CrtMode};
 use game_controller::GameController;
+use game_koi_core::cartridge::Cartridge;
+use game_koi_core::cpu::Cpu;
+use game_koi_core::joypad::Button;
+use game_koi_core::ppu::{SCREEN_HEIGHT, SCREEN_WIDTH};
+use game_koi_core::testbus::TestBus;
 use overlay::Overlay;
 use stats::{FrameStats, GpuInfo};
 

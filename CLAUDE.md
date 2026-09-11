@@ -20,6 +20,58 @@ This shapes how to work in this repo:
 
 ## State of the repo
 
+**The repo is a Cargo workspace of three crates.** The split is along the one seam the
+project already had — the emulated machine knows nothing of the host — so it is a
+relocation, not a redesign:
+
+- `crates/game-koi-core/` — the emulated Game Boy. No `std::fs`, no `std::time`, no
+  threads. This is what makes the browser build possible, and it **compiles for
+  `wasm32-unknown-unknown` unchanged**; keep it that way. Paths below written as
+  `src/cpu/` mean `crates/game-koi-core/src/cpu/`.
+- `crates/game-koi-desktop/` — the binary (still named `game-koi`), the winit/pixels/
+  cpal/gilrs/egui frontend, and battery-backed saves. Everything host-shaped.
+- `crates/game-koi-web/` — a `wasm-bindgen` wrapper exposing an `Emulator` to
+  JavaScript, plus the page itself in `web/`. Build with `crates/game-koi-web/build.sh`
+  and serve `web/` over HTTP (`file://` will not work — ES modules and `AudioWorklet`
+  both require an origin). The generated `web/pkg/` is gitignored.
+
+  **The page paces off the audio buffer, not the clock or the display.** This is the one
+  place the browser frontend is a different design rather than a translation: the
+  desktop build sleeps until each 16.74 ms deadline, but a page must not block its main
+  thread, and `requestAnimationFrame` fires at the display's rate — 120 Hz on this
+  machine — which is not 59.73 Hz. So `rAF` is only a wake-up; on each wake the page
+  asks the `AudioWorklet` how much audio is left and emulates enough frames to top it
+  up. When the two clocks disagree, audio wins, because a dry buffer is audible and a
+  repeated frame is not. `MAX_FRAMES_PER_WAKE` caps the catch-up so a backgrounded tab
+  (where `rAF` stops firing) does not return to a freeze.
+
+  **`wasm-bindgen` the CLI and `wasm-bindgen` the crate must be the same version.**
+  Pinned to 0.2.128 in both `Cargo.toml` and `build.sh`, which checks and refuses rather
+  than emitting glue that does not match the module's ABI. Install with
+  `cargo install wasm-bindgen-cli --version 0.2.128`.
+
+  **Any wasm allocation can detach a JS view over wasm memory**, silently — you get a
+  zero-length array, not an error. `main.js` rebuilds its `Uint8ClampedArray` over
+  `frame_ptr()` each frame for this reason; do not hoist it out of the loop.
+
+Check the core still builds for the browser after touching it:
+
+```
+cargo build -p game-koi-core --target wasm32-unknown-unknown
+```
+
+Two things the split needed, both worth knowing before they bite:
+
+- `header::write_logo_at` is behind the core's **`test-support` feature**, not
+  `#[cfg(test)]`, because `cfg(test)` only holds within the crate being compiled and the
+  desktop crate's save tests need it. The desktop crate turns the feature on as a
+  dev-dependency.
+- The ROM suites resolve `test-roms/` via `CARGO_MANIFEST_DIR` **plus `../..`**, since
+  that variable now points at the crate rather than the repo root. Get this wrong and
+  every ROM test skips silently and the suite still reports green — exactly the failure
+  the Testing section warns about.
+
+
 All seven steps of the build order below are done: the emulator opens a window, plays banked commercial
 ROMs, and makes sound. What remains is accuracy work and the gaps listed per subsystem, not missing
 subsystems. Verify against the actual tree before assuming anything here is still current.
@@ -42,7 +94,7 @@ subsystems. Verify against the actual tree before assuming anything here is stil
   timer and envelope both share. The 512 Hz sequencer is **DIV bit 4 falling**, not a clock of its own,
   so a `DIV` write can step it early — that falls out rather than being special-cased. The APU emits
   finished stereo samples into a bounded queue; the core never talks to an audio device.
-- `src/save.rs` — battery-backed saves. Only for cartridges whose header says they have a battery: RAM on
+- `game-koi-desktop/src/save.rs` — battery-backed saves. Only for cartridges whose header says they have a battery: RAM on
   a battery-less board is volatile on hardware too, so persisting it would invent a memory the cartridge
   never had. Files go in `dirs::data_dir()/game-koi/<rom-stem>.sav` (data, not config — a save is
   generated state), are written through a temporary plus a rename so a crash cannot truncate one, and are
@@ -50,7 +102,7 @@ subsystems. Verify against the actual tree before assuming anything here is stil
   and friends must not, since Blargg's ROMs write their results into SRAM. **MBC3's RTC is not persisted.**
 - `src/joypad.rs` — P1. All the active-low inversion lives here; the public API is plain
   `press`/`release`. Selecting a button group means writing its select bit **low**.
-- `src/frontend/` — window, input, audio out, frame pacing (winit + pixels + gilrs + cpal + egui). The only module outside the
+- `game-koi-desktop/src/frontend/` — window, input, audio out, frame pacing (winit + pixels + gilrs + cpal + egui). The only module outside the
   emulated machine; the core never depends on it, which is what keeps `--test` and `--screenshot`
   headless. `mod.rs` holds the window, the palette, pacing, and the `Action` enum both input devices
   emit; `keyboard_input.rs` and `game_controller.rs` are pure per-device translation to `Action`, so
@@ -187,7 +239,25 @@ cargo test <substring>      # tests whose name contains <substring>
 cargo test -- --nocapture   # let println!/debug tracing through
 cargo clippy --all-targets  # lint
 cargo fmt                   # format
+
+cargo build -p game-koi-core --target wasm32-unknown-unknown   # the core must keep building for the browser
+cargo build -p game-koi-web  --target wasm32-unknown-unknown   # the wasm-bindgen wrapper
 ```
+
+`cargo run`/`cargo test` still work from the repo root and still produce a binary called
+`game-koi`, so nothing in the sections above changed shape when the workspace was split.
+The browser build needs the target installed once: `rustup target add wasm32-unknown-unknown`.
+The browser frontend is built by `crates/game-koi-web/build.sh` (which runs both the
+cargo build and `wasm-bindgen`), then served statically:
+
+```
+./crates/game-koi-web/build.sh
+python3 -m http.server -d crates/game-koi-web/web 8080
+```
+
+**The ALSA and libudev requirements above are `game-koi-desktop`'s, not the core's.**
+`cargo build -p game-koi-core` needs neither, which is what lets the wasm build work on a
+machine with no sound stack at all.
 
 ## Hardware reference
 
@@ -264,6 +334,20 @@ Suggested order, each step ending somewhere runnable:
 status byte and its text into cartridge RAM at 0xA000 behind the signature `DE B0 61`. `--test` checks
 both, because a ROM using the second one produces no serial output and then spins in `jr $` — which looks
 exactly like a hang if you only know the first.
+
+**Frame length is correct, and a mean over frames will tell you otherwise.** Measured on
+Tetris in steady state, 999 of 1000 frames take **17554-17558 M-cycles against the ideal
+17556** (154 lines x 114), which is 59.73 Hz to within 0.005%. The APU tracks it: 803.6
+samples per frame where 48000/59.7275 = 803.65.
+
+The trap is that **a frame during which the game turns the LCD off is arbitrarily long**.
+`Ppu::tick` returns immediately when LCDC bit 7 is clear, so `frame_ready` never fires
+and the `while !frame_ready` loop keeps stepping until the game switches the LCD back on
+— Tetris's boot does this for two frames of 106160 and 75937 M-cycles, and something
+later does it again for 84038. That is correct hardware behaviour, not a stall: a real
+DMG with its LCD off is not producing frames either. But three outliers in a thousand are
+enough to drag a naive mean from 17555 to 17733 and invent a 1-2% timing error that is
+not there. Exclude LCD-off frames before averaging anything.
 
 **The APU's known gap** is DMG wave RAM access timing: on hardware the CPU can reach wave RAM on the exact
 cycle CH3 reads a sample, and gets the byte CH3 is reading whatever address it asked for. This bus ticks

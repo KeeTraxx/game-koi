@@ -29,7 +29,7 @@
 
 use pixels::wgpu;
 
-use crate::ppu::SCREEN_HEIGHT;
+use game_koi_core::ppu::SCREEN_HEIGHT;
 
 /// How deep the dark rows go, from 0.0 to 1.0.
 ///

@@ -30,19 +30,39 @@ relocation, not a redesign:
   `src/cpu/` mean `crates/game-koi-core/src/cpu/`.
 - `crates/game-koi-desktop/` — the binary (still named `game-koi`), the winit/pixels/
   cpal/gilrs/egui frontend, and battery-backed saves. Everything host-shaped.
-- `crates/game-koi-web/` — a `wasm-bindgen` wrapper exposing an `Emulator` to
-  JavaScript, plus the page itself in `web/`. Build with `crates/game-koi-web/build.sh`
-  and serve `web/` over HTTP (`file://` will not work — ES modules and `AudioWorklet`
-  both require an origin). The generated `web/pkg/` is gitignored.
+- `crates/game-koi-web/` — a `wasm-bindgen` wrapper exposing a low-level `Emulator` to
+  JavaScript (`src/lib.rs`), a hand-written TypeScript wrapper around it that is the
+  actual **`game-koi` npm package** (`js/`), and a demo page (`web/`) that consumes
+  that package rather than the raw bindings — so the demo doubles as an integration
+  test of the thing consumers actually install. Build everything with
+  `crates/game-koi-web/build.sh`; the generated `js/wasm/` (wasm-bindgen's output) and
+  `js/dist/` (the compiled npm package) are both gitignored.
 
-  **The page paces off the audio buffer, not the clock or the display.** This is the one
-  place the browser frontend is a different design rather than a translation: the
+  **The npm package (`js/`) is the integration surface, not the raw bindings.**
+  `js/src/index.ts` exports one class, `GameKoi`: give it a canvas and a ROM's bytes
+  and it owns wasm setup, the `AudioContext`/`AudioWorklet`, the render/audio pacing
+  loop, and (optionally) keyboard input. This exists because the raw `wasm-bindgen`
+  `Emulator` is deliberately low-level (see `src/lib.rs`'s doc comment) — pointers into
+  wasm memory, a bare `run_frame`/`take_samples` pair, no pacing — and asking every
+  consumer to reimplement the pacing loop and audio wiring correctly would make
+  "integrate the emulator" and "reimplement half its host glue" the same task. The
+  package ships with TypeScript's own generated `.d.ts` (`js/tsconfig.json` just runs
+  `tsc`, no bundler), and `wasm-bindgen --target web` (not `--no-typescript`) so its
+  own `.d.ts` carries through too.
+
+  **The `AudioWorklet` processor is a template string (`js/src/worklet.ts`), not a
+  file the consumer serves.** `GameKoi.create` turns it into a `Blob` and loads it via
+  `URL.createObjectURL` — a page that installs `game-koi` never needs to know the
+  worklet exists, let alone configure a server or bundler to find it.
+
+  **The page paces off the audio buffer, not the clock or the display.** This is the
+  one place the browser frontend is a different design rather than a translation: the
   desktop build sleeps until each 16.74 ms deadline, but a page must not block its main
   thread, and `requestAnimationFrame` fires at the display's rate — 120 Hz on this
-  machine — which is not 59.73 Hz. So `rAF` is only a wake-up; on each wake the page
+  machine — which is not 59.73 Hz. So `rAF` is only a wake-up; on each wake `GameKoi`
   asks the `AudioWorklet` how much audio is left and emulates enough frames to top it
   up. When the two clocks disagree, audio wins, because a dry buffer is audible and a
-  repeated frame is not. `MAX_FRAMES_PER_WAKE` caps the catch-up so a backgrounded tab
+  repeated frame is not. `maxFramesPerWake` caps the catch-up so a backgrounded tab
   (where `rAF` stops firing) does not return to a freeze.
 
   **`wasm-bindgen` the CLI and `wasm-bindgen` the crate must be the same version.**
@@ -51,8 +71,10 @@ relocation, not a redesign:
   `cargo install wasm-bindgen-cli --version 0.2.128`.
 
   **Any wasm allocation can detach a JS view over wasm memory**, silently — you get a
-  zero-length array, not an error. `main.js` rebuilds its `Uint8ClampedArray` over
-  `frame_ptr()` each frame for this reason; do not hoist it out of the loop.
+  zero-length array, not an error. `GameKoi`'s `drawFrame` re-reads `wasmMemory.buffer`
+  fresh every call rather than caching it, specifically so a memory growth mid-session
+  is picked up automatically instead of handing back a detached view; do not hoist that
+  read out of the per-frame path.
 
 Check the core still builds for the browser after touching it:
 
@@ -247,13 +269,20 @@ cargo build -p game-koi-web  --target wasm32-unknown-unknown   # the wasm-bindge
 `cargo run`/`cargo test` still work from the repo root and still produce a binary called
 `game-koi`, so nothing in the sections above changed shape when the workspace was split.
 The browser build needs the target installed once: `rustup target add wasm32-unknown-unknown`.
-The browser frontend is built by `crates/game-koi-web/build.sh` (which runs both the
-cargo build and `wasm-bindgen`), then served statically:
+The browser frontend is built by `crates/game-koi-web/build.sh` (which runs the cargo
+build, `wasm-bindgen`, `npm install`, and the npm package's `tsc` build, in that order),
+then served statically from the crate root — not from `web/` alone, since the demo page
+now imports its sibling `js/dist/` and `js/wasm/` directories:
 
 ```
 ./crates/game-koi-web/build.sh
-python3 -m http.server -d crates/game-koi-web/web 8080
+python3 -m http.server -d crates/game-koi-web 8080
+# open http://localhost:8080/web/
 ```
+
+The `game-koi` npm package itself lives in `crates/game-koi-web/js/`; `npm pack` from
+there (after a build) is what would go to the registry. It needs Node installed but
+nothing else host-specific — no ALSA/libudev, since it never touches `game-koi-desktop`.
 
 **The ALSA and libudev requirements above are `game-koi-desktop`'s, not the core's.**
 `cargo build -p game-koi-core` needs neither, which is what lets the wasm build work on a

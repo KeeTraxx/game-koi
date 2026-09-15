@@ -2,4 +2,6 @@
 /test-roms
 /roms
 /screenshot.pgm
-/crates/game-koi-web/web/pkg
+/crates/game-koi-web/js/wasm
+/crates/game-koi-web/js/dist
+/crates/game-koi-web/js/node_modules

@@ -23,9 +23,22 @@ if [ "$have" != "$VERSION" ]; then
 fi
 
 cargo build -p game-koi-web --release --target wasm32-unknown-unknown
-wasm-bindgen --target web --no-typescript \
-  --out-dir crates/game-koi-web/web/pkg \
+
+# --target web (rather than --no-typescript) so the npm package gets a real .d.ts.
+# The demo page (web/) imports the built npm package from js/dist rather than this
+# output directly, so there is only one wasm-bindgen output to keep in sync.
+wasm-bindgen --target web \
+  --out-dir crates/game-koi-web/js/wasm \
   target/wasm32-unknown-unknown/release/game_koi_web.wasm
 
-echo "built. serve it with:"
-echo "  python3 -m http.server -d crates/game-koi-web/web 8080"
+(
+  cd crates/game-koi-web/js
+  npm install --no-audit --no-fund
+  npm run build
+)
+
+echo "built. serve the demo page with:"
+echo "  python3 -m http.server -d crates/game-koi-web 8080"
+echo "  then open http://localhost:8080/web/"
+echo
+echo "the npm package itself is crates/game-koi-web/js (built into js/dist + js/wasm)."

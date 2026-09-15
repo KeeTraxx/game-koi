@@ -1,0 +1,45 @@
+{
+  "name": "game-koi",
+  "version": "0.1.0",
+  "description": "A Game Boy (DMG) emulator, compiled to WebAssembly, with a drop-in canvas + audio wrapper",
+  "type": "module",
+  "main": "dist/index.js",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "wasm",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "gameboy",
+    "game boy",
+    "dmg",
+    "emulator",
+    "wasm",
+    "webassembly"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/KeeTraxx/game-koi.git",
+    "directory": "crates/game-koi-web/js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0"
+  }
+}

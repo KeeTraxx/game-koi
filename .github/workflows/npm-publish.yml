@@ -1,0 +1,98 @@
+name: Publish npm package
+
+# Two ways in:
+#   - push a tag like `v0.1.0` — the real release path. The tag's version is checked
+#     against crates/game-koi-web/js/package.json before anything is published, so a
+#     stray tag can't ship the wrong version.
+#   - workflow_dispatch — manual, for a dry run or to re-publish by hand. There is no
+#     tag in this case, so whatever version is currently in package.json is what
+#     would be published; use the dry_run input to check that without touching the
+#     registry.
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build and check only — do not actually publish"
+        type: boolean
+        default: true
+
+# id-token: write is what lets `npm publish --provenance` mint its attestation via
+# GitHub's OIDC token instead of a long-lived secret.
+permissions:
+  contents: read
+  id-token: write
+
+# Only one publish at a time; don't cancel one that's already talking to the registry.
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
+
+env:
+  WASM_BINDGEN_VERSION: "0.2.128"
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Add the wasm target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/bin
+            target
+          key: ${{ runner.os }}-cargo-${{ env.WASM_BINDGEN_VERSION }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install wasm-bindgen-cli
+        # Must match the `wasm-bindgen` crate version exactly (build.sh checks this
+        # itself and refuses to proceed on a mismatch) — cached above by version, so
+        # this is a no-op after the first run.
+        run: |
+          if ! command -v wasm-bindgen >/dev/null || \
+             [ "$(wasm-bindgen --version | awk '{print $2}')" != "$WASM_BINDGEN_VERSION" ]; then
+            cargo install wasm-bindgen-cli --version "$WASM_BINDGEN_VERSION" --force
+          fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: "https://registry.npmjs.org"
+          cache: npm
+          cache-dependency-path: crates/game-koi-web/js/package-lock.json
+
+      - name: Run the core's unit tests
+        run: cargo test -p game-koi-core
+
+      - name: Build the core, the wasm bindings, and the npm package
+        run: ./crates/game-koi-web/build.sh
+
+      - name: Check the tag matches package.json's version
+        if: github.event_name == 'push'
+        working-directory: crates/game-koi-web/js
+        run: |
+          pkg_version=$(node -p "require('./package.json').version")
+          tag_version=${GITHUB_REF_NAME#v}
+          if [ "$pkg_version" != "$tag_version" ]; then
+            echo "tag $GITHUB_REF_NAME does not match package.json version $pkg_version" >&2
+            exit 1
+          fi
+
+      - name: Publish
+        working-directory: crates/game-koi-web/js
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+        run: |
+          if [ "$DRY_RUN" = "true" ]; then
+            npm publish --access public --provenance --dry-run
+          else
+            npm publish --access public --provenance
+          fi

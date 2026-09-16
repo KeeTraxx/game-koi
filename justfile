@@ -58,10 +58,10 @@ npm-dry-run: build-web
 npm-publish: build-web
     npm publish --access public
 
-# Tag Cargo.toml's current version as a release and push it (bump the version first).
+# Tag main's committed version and push it (bump the version and commit it first).
 tag:
     #!/usr/bin/env bash
     set -euo pipefail
-    version=$(cargo pkgid -p game-koi-web | sed 's/.*#//')
+    version=$(jj file show -r main Cargo.toml | grep -m1 '^version = ' | cut -d'"' -f2)
     jj tag set "v$version" -r main
     git push origin "v$version"

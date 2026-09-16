@@ -31,8 +31,14 @@ wasm-bindgen --target web \
   --out-dir crates/game-koi-web/js/wasm \
   target/wasm32-unknown-unknown/release/game_koi_web.wasm
 
+# Cargo.toml's workspace.package.version is the one canonical version number for the
+# whole project; package.json is kept in sync with it here rather than hand-edited,
+# so there is nowhere for the two to drift apart.
+CRATE_VERSION=$(cargo pkgid -p game-koi-web | sed 's/.*#//')
+
 (
   cd crates/game-koi-web/js
+  npm pkg set version="$CRATE_VERSION"
   npm install --no-audit --no-fund
   npm run build
 )

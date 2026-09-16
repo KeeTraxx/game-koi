@@ -1,12 +1,13 @@
 name: Publish npm package
 
 # Two ways in:
-#   - push a tag like `v0.1.0` — the real release path. The tag's version is checked
-#     against crates/game-koi-web/js/package.json before anything is published, so a
-#     stray tag can't ship the wrong version.
+#   - push a tag like `v0.1.0` — the real release path. package.json's version is
+#     synced from Cargo.toml's workspace.package.version during the build (see
+#     build.sh), and the tag is checked against that before anything is published, so
+#     a stray tag can't ship the wrong version.
 #   - workflow_dispatch — manual, for a dry run or to re-publish by hand. There is no
-#     tag in this case, so whatever version is currently in package.json is what
-#     would be published; use the dry_run input to check that without touching the
+#     tag in this case, so whatever version is currently in Cargo.toml is what would
+#     be published; use the dry_run input to check that without touching the
 #     registry.
 on:
   push:
@@ -19,8 +20,10 @@ on:
         type: boolean
         default: true
 
-# id-token: write is what lets `npm publish --provenance` mint its attestation via
-# GitHub's OIDC token instead of a long-lived secret.
+# id-token: write is the whole auth story here: npm's trusted publishing exchanges
+# this workflow's GitHub OIDC token for a short-lived npm credential at publish time,
+# scoped to exactly this repo + workflow file. No NPM_TOKEN secret, nothing to rotate
+# or leak.
 permissions:
   contents: read
   id-token: write
@@ -63,7 +66,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: lts/*
           registry-url: "https://registry.npmjs.org"
           cache: npm
           cache-dependency-path: crates/game-koi-web/js/package-lock.json
@@ -88,7 +91,6 @@ jobs:
       - name: Publish
         working-directory: crates/game-koi-web/js
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
         run: |
           if [ "$DRY_RUN" = "true" ]; then

@@ -76,6 +76,13 @@ relocation, not a redesign:
   is picked up automatically instead of handing back a detached view; do not hoist that
   read out of the per-frame path.
 
+  **`js/package.json`'s version is never hand-edited.** `Cargo.toml`'s
+  `workspace.package.version` is the one canonical version number for the whole
+  project (Rust crates and the npm package alike); `build.sh` runs `npm pkg set
+  version=...` from it on every build, so bumping a release is a single edit in
+  `Cargo.toml` followed by `just tag` (which reads that version back out via `cargo
+  pkgid` to name and push the release tag).
+
 Check the core still builds for the browser after touching it:
 
 ```

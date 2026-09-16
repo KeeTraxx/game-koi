@@ -2,7 +2,9 @@
 resolver = "3"
 members = ["crates/game-koi-core", "crates/game-koi-desktop", "crates/game-koi-web"]
 
-# Shared by every crate in the workspace, so a version bump happens in one place.
+# Shared by every crate in the workspace, so a version bump happens in one place. Also
+# the version the `game-koi` npm package publishes as — build.sh syncs it into
+# crates/game-koi-web/js/package.json, so that file's version is never hand-edited.
 [workspace.package]
 version = "0.1.0"
 edition = "2024"

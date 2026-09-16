@@ -99,7 +99,7 @@ fn main() -> ExitCode {
             print!("{}", cart.header());
             println!("\ncontrols: arrows = d-pad, Z = A, X = B, Enter = Start, RShift = Select");
             println!(
-                "          P = pause, F1 = stats overlay, F2 = vsync, F3 = CRT effect, Esc = quit"
+                "          P = pause, ` = stats overlay, F2 = vsync, F3 = CRT effect, Esc = quit"
             );
             println!("  gamepad: d-pad or left stick, East = A, South = B, Start, Select");
             if let Err(err) = frontend::run(&cart, 4, exit_after) {

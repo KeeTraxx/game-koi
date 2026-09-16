@@ -10,6 +10,9 @@
 
 import init, { Emulator } from "../wasm/game_koi_web.js";
 import { WORKLET_SOURCE } from "./worklet.js";
+import { DEFAULT_GAMEPAD_MAP, GamepadInput, type Action } from "./gamepad.js";
+import { FrameStats } from "./stats.js";
+import { StatsOverlay } from "./overlay.js";
 
 export type Button = "up" | "down" | "left" | "right" | "a" | "b" | "start" | "select";
 
@@ -24,6 +27,19 @@ export interface GameKoiOptions {
    * build's layout: arrow keys, Z/X, Enter, right Shift.
    */
   keymap?: Record<string, Button> | null;
+  /**
+   * Maps a standard-layout gamepad's button indices to a button. Pass `null` to
+   * disable gamepad polling entirely. Defaults to the desktop build's layout: d-pad,
+   * East/South face buttons for A/B, Start and Back/Select. The left analog stick acts
+   * as a d-pad regardless of this map, since it is a direction rather than an index.
+   */
+  gamepadMap?: Record<number, Button> | null;
+  /**
+   * `KeyboardEvent.code` that toggles the debug stats panel. Default `"Backquote"`
+   * (the ` / ~ key). Pass `null` to bind no key and drive {@link GameKoi.toggleOverlay}
+   * yourself. Like `keymap`, this is a physical key position, not a character.
+   */
+  overlayKey?: string | null;
   /** Samples to keep queued ahead of playback. Default 1600 (~2 frames at 48kHz). */
   targetBuffer?: number;
   /**
@@ -61,14 +77,22 @@ export class GameKoi {
   private readonly wasmMemory: WebAssembly.Memory;
   private readonly imageData: ImageData;
   private readonly keymap: Record<string, Button> | null;
+  private readonly gamepad: GamepadInput | null;
   private readonly targetBuffer: number;
   private readonly maxFramesPerWake: number;
+  private readonly stats: FrameStats;
   private emulator: Emulator;
   private buffered = 0;
+  /** Cumulative worklet counters, as last reported. See `worklet.ts`. */
+  private underruns = 0;
+  private dropped = 0;
+  /** Built on first toggle, so a page that never opens it gets no element. */
+  private overlay: StatsOverlay | null = null;
   private running = false;
   private rafHandle = 0;
   private keydownListener?: (event: KeyboardEvent) => void;
   private keyupListener?: (event: KeyboardEvent) => void;
+  private overlayListener?: (event: KeyboardEvent) => void;
 
   private constructor(
     emulator: Emulator,
@@ -77,6 +101,8 @@ export class GameKoi {
     audioContext: AudioContext,
     worklet: AudioWorkletNode,
     keymap: Record<string, Button> | null,
+    gamepadMap: Record<number, Button> | null,
+    overlayKey: string | null,
     targetBuffer: number,
     maxFramesPerWake: number,
   ) {
@@ -86,14 +112,19 @@ export class GameKoi {
     this.audioContext = audioContext;
     this.worklet = worklet;
     this.keymap = keymap;
+    this.gamepad = gamepadMap ? new GamepadInput(gamepadMap) : null;
     this.targetBuffer = targetBuffer;
     this.maxFramesPerWake = maxFramesPerWake;
     this.imageData = ctx.createImageData(Emulator.width(), Emulator.height());
+    this.stats = new FrameStats(performance.now());
 
     this.worklet.port.onmessage = (event) => {
       this.buffered = event.data.buffered;
+      this.underruns = event.data.underruns;
+      this.dropped = event.data.dropped;
     };
     if (keymap) this.attachKeyboard();
+    if (overlayKey !== null) this.attachOverlayKey(overlayKey);
   }
 
   /**
@@ -127,6 +158,8 @@ export class GameKoi {
 
     const emulator = new Emulator(options.rom, audioContext.sampleRate);
     const keymap = options.keymap === null ? null : options.keymap ?? DEFAULT_KEYMAP;
+    const gamepadMap =
+      options.gamepadMap === null ? null : options.gamepadMap ?? DEFAULT_GAMEPAD_MAP;
 
     const koi = new GameKoi(
       emulator,
@@ -135,6 +168,8 @@ export class GameKoi {
       audioContext,
       worklet,
       keymap,
+      gamepadMap,
+      options.overlayKey === null ? null : options.overlayKey ?? "Backquote",
       options.targetBuffer ?? 1600,
       options.maxFramesPerWake ?? 4,
     );
@@ -145,6 +180,10 @@ export class GameKoi {
 
   /** Swaps in a new ROM, keeping the same canvas and audio graph. */
   loadRom(rom: Uint8Array): void {
+    // The new machine's joypad starts with nothing held, so the snapshot of what is
+    // held has to start over too or the first poll will emit no press for a direction
+    // that was already down.
+    this.gamepad?.releaseAll();
     this.emulator.free();
     this.emulator = new Emulator(rom, this.audioContext.sampleRate);
   }
@@ -157,9 +196,28 @@ export class GameKoi {
     this.emulator.release(button);
   }
 
+  /**
+   * Shows or hides the debug stats panel — the same thing the ` key does.
+   *
+   * The panel is built the first time this is called, so a page that never opens it
+   * never gets an extra element in its DOM.
+   */
+  toggleOverlay(): void {
+    this.overlay ??= new StatsOverlay(this.ctx.canvas);
+    this.overlay.toggle();
+  }
+
+  /** Whether the stats panel is currently showing. */
+  get overlayVisible(): boolean {
+    return this.overlay?.visible ?? false;
+  }
+
   pause(): void {
     this.running = false;
     cancelAnimationFrame(this.rafHandle);
+    // A direction held at the moment of the pause has no poll coming to release it,
+    // so it would still be down when the machine resumes.
+    this.applyGamepadActions(this.gamepad?.releaseAll());
     void this.audioContext.suspend();
   }
 
@@ -175,6 +233,8 @@ export class GameKoi {
     this.running = false;
     cancelAnimationFrame(this.rafHandle);
     this.detachKeyboard();
+    if (this.overlayListener) removeEventListener("keydown", this.overlayListener);
+    this.overlay?.dispose();
     this.emulator.free();
     this.worklet.disconnect();
     void this.audioContext.close();
@@ -182,6 +242,12 @@ export class GameKoi {
 
   private loop = (): void => {
     if (!this.running) return;
+
+    const wokeAt = performance.now();
+    this.pollGamepads();
+    // Measured from after the input poll: reading a gamepad snapshot is neither
+    // emulation nor drawing, and it costs a fraction of a microsecond.
+    const emulateStart = performance.now();
 
     // Emulate however many frames the audio buffer is short by, capped. Audio wins
     // when the display's refresh rate and the Game Boy's 59.73Hz disagree, since a
@@ -205,9 +271,49 @@ export class GameKoi {
       frames++;
     }
 
+    const drawStart = performance.now();
     if (frames > 0) this.drawFrame();
+    const drawEnd = performance.now();
+
+    this.recordWake(wokeAt, emulateStart, drawStart, drawEnd, frames);
     this.rafHandle = requestAnimationFrame(this.loop);
   };
+
+  /**
+   * Feeds the counters and refreshes the panel.
+   *
+   * Always run, not just while the panel is open: the averages are computed over half a
+   * second, so a panel that only started counting when it opened would show nothing for
+   * its first window. The cost is four `performance.now()` reads per wake.
+   */
+  private recordWake(
+    wokeAt: number,
+    emulateStart: number,
+    drawStart: number,
+    drawEnd: number,
+    frames: number,
+  ): void {
+    this.stats.wake(
+      {
+        emulate: drawStart - emulateStart,
+        draw: frames > 0 ? drawEnd - drawStart : 0,
+        frames,
+        // The catch-up was clamped and the buffer is still short, so a deficit is
+        // being carried into the next wake.
+        capped: frames >= this.maxFramesPerWake && this.buffered < this.targetBuffer,
+      },
+      wokeAt,
+    );
+    this.stats.setAudio({
+      buffered: this.buffered,
+      target: this.targetBuffer,
+      underruns: this.underruns,
+      dropped: this.dropped,
+      sampleRate: this.audioContext.sampleRate,
+      state: this.audioContext.state,
+    });
+    this.overlay?.update(this.stats.snapshot(), wokeAt);
+  }
 
   private drawFrame(): void {
     // Read `wasmMemory.buffer` fresh rather than caching it: any wasm allocation can
@@ -221,6 +327,28 @@ export class GameKoi {
     );
     this.imageData.data.set(bytes);
     this.ctx.putImageData(this.imageData, 0, 0);
+  }
+
+  /**
+   * Reads every connected pad and applies whatever changed since the last wake.
+   *
+   * Done here rather than from a listener because the Gamepad API fires no event for a
+   * button: `getGamepads()` is a snapshot and polling it is the only way to see one.
+   */
+  private pollGamepads(): void {
+    if (!this.gamepad) return;
+    // Guarded because the API is absent outside a secure context, and in a few
+    // embedded webviews that still have no gamepad support at all.
+    const pads = navigator.getGamepads?.();
+    if (!pads) return;
+    this.applyGamepadActions(this.gamepad.poll(pads));
+  }
+
+  private applyGamepadActions(actions: Action[] | undefined): void {
+    for (const action of actions ?? []) {
+      if (action.type === "press") this.press(action.button);
+      else this.release(action.button);
+    }
   }
 
   private attachKeyboard(): void {
@@ -245,5 +373,21 @@ export class GameKoi {
   private detachKeyboard(): void {
     if (this.keydownListener) removeEventListener("keydown", this.keydownListener);
     if (this.keyupListener) removeEventListener("keyup", this.keyupListener);
+  }
+
+  /**
+   * Binds the panel's toggle key.
+   *
+   * Its own listener rather than a case inside the keymap one, because the two are
+   * independent: a page that drives the joypad itself (`keymap: null`) can still want
+   * the panel, and the panel key is not a Game Boy button.
+   */
+  private attachOverlayKey(code: string): void {
+    this.overlayListener = (event: KeyboardEvent) => {
+      if (event.code !== code || event.repeat) return;
+      this.toggleOverlay();
+      event.preventDefault();
+    };
+    addEventListener("keydown", this.overlayListener);
   }
 }

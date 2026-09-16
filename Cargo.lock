@@ -840,11 +840,11 @@ dependencies = [
 
 [[package]]
 name = "game-koi-core"
-version = "0.1.2"
+version = "0.2.0"
 
 [[package]]
 name = "game-koi-desktop"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "cpal",
  "dirs",
@@ -859,7 +859,7 @@ dependencies = [
 
 [[package]]
 name = "game-koi-web"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "game-koi-core",
  "wasm-bindgen",

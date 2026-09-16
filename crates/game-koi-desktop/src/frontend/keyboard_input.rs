@@ -32,15 +32,20 @@ pub fn map_key(key: KeyCode) -> Option<Button> {
 
 /// Turns a key event into the action it should trigger, if any.
 ///
-/// Escape, P, F1, F2 and F3 are host-side controls: the emulated machine never sees
+/// Escape, P, `, F2 and F3 are host-side controls: the emulated machine never sees
 /// them, because the DMG had no such buttons. Everything else falls through to
 /// [`map_key`].
+///
+/// The overlay is on the backtick rather than F1 so that both frontends agree: the
+/// browser build binds the same key, and `KeyCode` and the web's `KeyboardEvent.code`
+/// are the same UI Events names, so "Backquote" means the same physical key on either
+/// side. It is a position, not a character — whatever sits left of the 1 key.
 pub fn action_for(key: KeyCode, state: ElementState) -> Option<Action> {
     if state == ElementState::Pressed {
         match key {
             KeyCode::Escape => return Some(Action::Quit),
             KeyCode::KeyP => return Some(Action::TogglePause),
-            KeyCode::F1 => return Some(Action::ToggleOverlay),
+            KeyCode::Backquote => return Some(Action::ToggleOverlay),
             KeyCode::F2 => return Some(Action::ToggleVsync),
             KeyCode::F3 => return Some(Action::CycleCrtMode),
             _ => {}
@@ -94,6 +99,19 @@ mod tests {
 
         // Host controls fire on the press only; the release is not a second toggle.
         assert_eq!(action_for(KeyCode::KeyP, ElementState::Released), None);
+    }
+
+    #[test]
+    fn backtick_toggles_the_overlay_on_the_press_only() {
+        // A toggle, so a release that also fired would leave the panel exactly as it
+        // was — the key would appear to do nothing at all.
+        assert_eq!(
+            action_for(KeyCode::Backquote, ElementState::Pressed),
+            Some(Action::ToggleOverlay)
+        );
+        assert_eq!(action_for(KeyCode::Backquote, ElementState::Released), None);
+        // And it must not also reach the joypad.
+        assert!(map_key(KeyCode::Backquote).is_none());
     }
 
     #[test]

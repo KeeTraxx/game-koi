@@ -77,6 +77,10 @@ jobs:
       - name: Build the core, the wasm bindings, and the npm package
         run: ./crates/game-koi-web/build.sh
 
+      - name: Run the npm package's tests
+        working-directory: crates/game-koi-web/js
+        run: npm test
+
       - name: Check the tag matches package.json's version
         if: github.event_name == 'push'
         working-directory: crates/game-koi-web/js

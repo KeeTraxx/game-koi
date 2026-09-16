@@ -26,10 +26,51 @@ button.addEventListener("click", async () => {
 ```
 
 That's the whole integration: no separate files to serve for the audio worklet, no
-manual wasm memory or canvas bookkeeping, and the built-in keyboard layout (arrow
-keys, Z/X, Enter, right Shift) is wired up automatically. Pass `keymap: null` to
-`create()` to opt out of that and drive `press`/`release` yourself — from a gamepad,
-touch controls, or your own key bindings.
+manual wasm memory or canvas bookkeeping, and both input devices are wired up
+automatically — the keyboard layout (arrow keys, Z/X, Enter, right Shift) and any
+connected gamepad. Pass `keymap: null` or `gamepadMap: null` to `create()` to opt out
+of either and drive `press`/`release` yourself — from touch controls or your own
+bindings.
+
+### Gamepads
+
+A standard-layout pad maps d-pad to d-pad, the East and South face buttons to A and B
+(the DMG's diagonal), Start to Start and Back/Select to Select. The left analog stick
+doubles as the d-pad, thresholded at half deflection. Every connected pad drives the
+one player, since the Game Boy has only one.
+
+Two things follow from how the browser exposes pads, and neither needs anything from
+the page:
+
+- There is no event for a button being pressed — only connect/disconnect — so pads are
+  polled once per animation frame. That is also why a pad shows up on its own in
+  Chrome, which hides pads until one has been interacted with.
+- Pads the browser cannot identify (`mapping !== "standard"`) are ignored, because the
+  button indices of an unrecognised layout are whatever the driver enumerated and
+  binding them would be confidently wrong rather than merely absent. Use
+  `gamepadMap: null` and your own polling for such a pad.
+
+### Debug overlay
+
+Press <kbd>`</kbd> (backtick) to toggle a stats panel over the canvas, or call
+`koi.toggleOverlay()`. It is the browser counterpart of the desktop build's panel, on
+the same key, and it counts browser-shaped things:
+
+- **FPS / Speed** — emulated frames per second, and that as a percentage of a real
+  DMG's 59.73 Hz. Frames, not animation-frame wakes: on a 120 Hz display the loop wakes
+  twice per frame.
+- **emulate / draw / Work** — milliseconds per emulated frame, and their total as a
+  share of the 16.74 ms a frame is worth.
+- **Frames/wake, Refresh, Capped** — how the two clocks relate, and how often
+  `maxFramesPerWake` clamped a catch-up.
+- **Buffer / Underruns / Dropped / Output** — how much audio is queued ahead, and the
+  two ways that goes wrong. Underruns are silence that was actually heard, and are the
+  closest thing here to the desktop's "late frames"; a `suspended` output is the usual
+  reason for no sound at all.
+
+The panel is read-only and `pointer-events: none`, so it never intercepts a click, and
+it is built the first time it is opened — a page that never opens it gets no extra
+element. Pass `overlayKey: null` to bind no key.
 
 ## API
 
@@ -38,12 +79,18 @@ touch controls, or your own key bindings.
   - `rom: Uint8Array` — the `.gb` file's bytes.
   - `keymap?: Record<string, Button> | null` — maps `KeyboardEvent.code` to a
     button; `null` disables built-in keyboard handling.
+  - `gamepadMap?: Record<number, Button> | null` — maps a standard-layout gamepad's
+    button indices to a button; `null` disables gamepad polling. The left stick acts
+    as a d-pad regardless of this map.
+  - `overlayKey?: string | null` — `KeyboardEvent.code` toggling the stats panel.
+    Default `"Backquote"`; `null` binds no key.
   - `targetBuffer?: number` — audio samples to keep queued ahead. Default `1600`.
   - `maxFramesPerWake?: number` — cap on frames emulated per wake-up, so a
     backgrounded tab can't return to a freeze. Default `4`.
 - `koi.loadRom(rom)` — swaps in a new ROM, keeping the same canvas and audio setup.
 - `koi.press(button)` / `koi.release(button)` — `Button` is one of `"up"`, `"down"`,
   `"left"`, `"right"`, `"a"`, `"b"`, `"start"`, `"select"`.
+- `koi.toggleOverlay()` / `koi.overlayVisible` — the debug stats panel.
 - `koi.pause()` / `koi.resume()`.
 - `koi.dispose()` — stops the loop and tears down the audio graph. Call this before
   dropping a `GameKoi` instance, or the AudioContext and its worklet leak.

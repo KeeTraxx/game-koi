@@ -45,6 +45,6 @@ CRATE_VERSION=$(cargo pkgid -p game-koi-web | sed 's/.*#//')
 
 echo "built. serve the demo page with:"
 echo "  python3 -m http.server -d crates/game-koi-web 8080"
-echo "  then open http://localhost:8080/web/"
+echo "  then open http://localhost:8080/"
 echo
 echo "the npm package itself is crates/game-koi-web/js (built into js/dist + js/wasm)."

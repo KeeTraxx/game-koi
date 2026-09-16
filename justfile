@@ -40,7 +40,17 @@ check-wasm:
 build-web:
     ./crates/game-koi-web/build.sh
 
-# Serve the browser demo at http://localhost:8080/web/.
+# The npm package's own tests (node's test runner, against the compiled dist/).
+[working-directory: 'crates/game-koi-web/js']
+test-web:
+    npm test
+
+# Serve the browser demo at http://localhost:8080/.
+#
+# The document root is the crate itself: index.html sits there next to js/, so the demo
+# is at `/` and the built package it imports is reachable at /js/dist/. Rooting the
+# server any deeper breaks that import — a static server will not serve a path above its
+# own root, and the failure looks like a blank page with one console line, not an error.
 serve-web: build-web
     python3 -m http.server -d crates/game-koi-web 8080
 

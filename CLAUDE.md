@@ -32,7 +32,8 @@ relocation, not a redesign:
   cpal/gilrs/egui frontend, and battery-backed saves. Everything host-shaped.
 - `crates/game-koi-web/` — a `wasm-bindgen` wrapper exposing a low-level `Emulator` to
   JavaScript (`src/lib.rs`), a hand-written TypeScript wrapper around it that is the
-  actual **`game-koi` npm package** (`js/`), and a demo page (`web/`) that consumes
+  actual **`game-koi` npm package** (`js/`), and a demo page (`index.html` + `main.js`
+  at the crate root, so that serving the crate puts the demo at `/`) that consumes
   that package rather than the raw bindings — so the demo doubles as an integration
   test of the thing consumers actually install. Build everything with
   `crates/game-koi-web/build.sh`; the generated `js/wasm/` (wasm-bindgen's output) and
@@ -54,6 +55,52 @@ relocation, not a redesign:
   file the consumer serves.** `GameKoi.create` turns it into a `Blob` and loads it via
   `URL.createObjectURL` — a page that installs `game-koi` never needs to know the
   worklet exists, let alone configure a server or bundler to find it.
+
+  **Input is keyboard plus gamepad, and the two arrive by opposite means.** The
+  keyboard is event-driven (`keydown`/`keyup` listeners in `js/src/index.ts`); the
+  Gamepad API fires no event for a button at all, only connect/disconnect, so
+  `js/src/gamepad.ts` takes a `navigator.getGamepads()` *snapshot* once per `rAF` wake
+  and diffs it against the previous one to recover the press/release edges the joypad
+  wants. That polling is also what makes a pad appear in Chrome, which hides pads until
+  one is touched. The mapping decisions mirror `game-koi-desktop`'s gilrs code — East/
+  South face buttons for A/B, left stick thresholded at half deflection, every
+  connected pad driving the one player — with two browser-specific differences: the
+  Gamepad API reports **+Y as down** (gilrs reports +Y as up), and pads whose `mapping`
+  is not `"standard"` are skipped entirely, since an unrecognised layout's indices are
+  whatever the driver enumerated. `gamepad.ts` is pure — snapshots in, edges out — and
+  is the one part of the package with unit tests: `js/test/*.test.js`, plain JS against
+  the compiled `dist/` so there is no test-only toolchain and nothing test-shaped in the
+  published package. `npm test` (or `just test-web`) builds and runs them; CI runs them
+  before publishing.
+
+  **The stats overlay is a DOM panel, not egui** (`js/src/overlay.ts` +
+  `js/src/stats.ts`, toggled with **`** — the same key the desktop uses). The desktop's
+  `overlay.rs` cannot be reused: it is bound to `egui_wgpu` (it borrows the
+  `wgpu::Device` `pixels` owns) and `egui_winit`, while this package renders with canvas
+  2D `putImageData` and has no winit; `stats.rs` additionally uses `std::time::Instant`,
+  which does not work on `wasm32-unknown-unknown`. Bringing real egui over would mean
+  WebGL/wgpu plus roughly 2 MB of wasm on an 86 KB package, paid by every consumer
+  whether or not they open the panel — so the *content* was ported and the rendering was
+  not. The file split mirrors the desktop's anyway (`stats.ts` counts, `overlay.ts`
+  draws), which is what keeps the counters unit-testable.
+
+  What it counts differs from the desktop on purpose, because the two are paced
+  differently. **`fps` counts emulated frames, not `rAF` wakes** — at 120 Hz the loop
+  wakes twice per frame, so counting wakes would report the refresh rate and say nothing
+  about the emulator; `framesPerWake` is the ratio between the two clocks. There is **no
+  "blocked" figure**, since a page never sleeps and never presents: its replacement is
+  the audio buffer, because with pacing driven by the sound card "am I keeping up" *is*
+  "is the buffer staying full". The worklet therefore counts underruns (silence actually
+  emitted — the closest analogue to the desktop's late frames) and dropped samples, and
+  reports both alongside `buffered` in the message it already sends every block. Vsync,
+  CRT mode and the GPU/adapter section have no web meaning and are gone; the panel is
+  read-only and `pointer-events: none` so it cannot swallow a click.
+
+  Two traps found the hard way: `js/src/worklet.ts` is a **template literal**, so a
+  backtick or `${` anywhere in it — including in a comment — ends the string and
+  produces a parse error pointing at a line that looks fine. And the panel is a sibling
+  of the canvas positioned from its bounding rect, **not** a wrapper around it, since
+  wrapping a consumer's canvas would move their node and break their own CSS.
 
   **The page paces off the audio buffer, not the clock or the display.** This is the
   one place the browser frontend is a different design rather than a translation: the
@@ -138,7 +185,9 @@ subsystems. Verify against the actual tree before assuming anything here is stil
   both are unit-testable with no window and no gamepad attached. `stats.rs` holds the host-side
   performance counters (rolling FPS, frame time, late frames) — all wall-clock facts about the
   *emulator*, never about the emulated machine, so nothing here belongs in the core. `overlay.rs` is
-  the egui debug panel, hidden by default and toggled with F1.
+  the egui debug panel, hidden by default and toggled with **`** (backtick) — the same key the
+  browser build uses, since winit's `KeyCode` and the web's `KeyboardEvent.code` are the same UI
+  Events names and so name the same physical key.
 
   `crt.rs` + `crt.wgsl` are the display post-process, cycled with F3 (`CrtMode`: `Off`, `Scanlines`).
   With an effect on, `ScalingRenderer::render` is pointed at an intermediate texture instead of the
@@ -278,13 +327,15 @@ cargo build -p game-koi-web  --target wasm32-unknown-unknown   # the wasm-bindge
 The browser build needs the target installed once: `rustup target add wasm32-unknown-unknown`.
 The browser frontend is built by `crates/game-koi-web/build.sh` (which runs the cargo
 build, `wasm-bindgen`, `npm install`, and the npm package's `tsc` build, in that order),
-then served statically from the crate root — not from `web/` alone, since the demo page
-now imports its sibling `js/dist/` and `js/wasm/` directories:
+then served statically **from the crate root**, which is where the demo's `index.html`
+lives — so the page is at `/` and the `js/dist/` and `js/wasm/` directories it imports
+are its siblings. Rooting the server any deeper 404s that import, since a static server
+will not serve a path above its own root:
 
 ```
 ./crates/game-koi-web/build.sh
 python3 -m http.server -d crates/game-koi-web 8080
-# open http://localhost:8080/web/
+# open http://localhost:8080/
 ```
 
 The `game-koi` npm package itself lives in `crates/game-koi-web/js/`; `npm pack` from
@@ -347,7 +398,7 @@ Suggested order, each step ending somewhere runnable:
    mid-scanline register changes are not modelled. Both are fine for games, not for Mooneye's PPU timing
    tests.
 5. ~~**Host frontend**~~ — done. winit 0.30 + pixels 0.17 + gilrs 0.11 + cpal 0.18 + dirs 7 + egui 0.35
-   (with egui-wgpu/egui-winit, for the F1 stats overlay), the only dependencies, all host-side. Paces on the emulator's own frame completion (59.73 Hz), not the host refresh rate.
+   (with egui-wgpu/egui-winit, for the ` stats overlay), the only dependencies, all host-side. Paces on the emulator's own frame completion (59.73 Hz), not the host refresh rate.
    Keyboard and gamepad are both live at once.
 6. ~~**MBC1 and beyond**~~ — done. `src/cartridge/mbc/`: MBC1 (+MBC1M), MBC2, MBC3 (+RTC), MBC5, plus
    battery-backed saves in `src/save.rs`. That covers essentially every commercial DMG and CGB cartridge.

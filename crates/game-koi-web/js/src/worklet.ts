@@ -10,6 +10,10 @@
 //
 // Kept as a source string, not a separate .js file, so `GameKoi` can register it via a
 // Blob URL — a consumer never needs to serve this file or point a bundler at it.
+//
+// Being a template literal, the body below cannot contain a backtick or a `${`, even in
+// a comment: either one ends the string. The failure is a parse error in *this* file
+// pointing at a line that looks fine.
 export const WORKLET_SOURCE = `
   const CAPACITY = 48000; // ~0.5s at 48kHz stereo: rides out a slow main thread.
 
@@ -20,6 +24,10 @@ export const WORKLET_SOURCE = `
       this.right = new Float32Array(CAPACITY);
       this.readIndex = 0;
       this.writeIndex = 0;
+      // The two ways this can go wrong, counted for the stats panel. Both are
+      // cumulative: what matters is whether they are climbing, not their value.
+      this.underruns = 0;
+      this.dropped = 0;
 
       this.port.onmessage = (event) => {
         const { left, right } = event.data;
@@ -29,6 +37,7 @@ export const WORKLET_SOURCE = `
           // permanently further behind the picture.
           if (next === this.readIndex) {
             this.readIndex = (this.readIndex + 1) % CAPACITY;
+            this.dropped++;
           }
           this.left[this.writeIndex] = left[i];
           this.right[this.writeIndex] = right[i];
@@ -52,6 +61,7 @@ export const WORKLET_SOURCE = `
           // which is worse.
           outL[i] = 0;
           outR[i] = 0;
+          this.underruns++;
         } else {
           outL[i] = this.left[this.readIndex];
           outR[i] = this.right[this.readIndex];
@@ -59,8 +69,15 @@ export const WORKLET_SOURCE = `
         }
       }
 
-      // The main thread paces itself off this number, so it goes back every block.
-      this.port.postMessage({ buffered: this.available() });
+      // The main thread paces itself off "buffered", so it goes back every block. The
+      // counters ride along in the same message rather than in one of their own —
+      // there is no cheaper time to send them, and a second postMessage per block from
+      // the audio thread would cost more than the numbers are worth.
+      this.port.postMessage({
+        buffered: this.available(),
+        underruns: this.underruns,
+        dropped: this.dropped,
+      });
       return true;
     }
   }

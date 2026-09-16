@@ -1,6 +1,6 @@
 {
   "name": "game-koi",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "A Game Boy (DMG) emulator, compiled to WebAssembly, with a drop-in canvas + audio wrapper",
   "type": "module",
   "main": "dist/index.js",

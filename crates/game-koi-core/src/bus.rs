@@ -46,6 +46,16 @@ pub struct FlatMemory {
     pub interrupts: crate::interrupts::InterruptState,
 }
 
+/// Zeroed memory, no cycles counted, no interrupts pending — the same thing `new`
+/// builds. Present because clippy asks for it whenever a `new` takes no arguments, and
+/// CI runs clippy with `-D warnings`.
+#[cfg(test)]
+impl Default for FlatMemory {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 impl FlatMemory {
     pub fn new() -> Self {

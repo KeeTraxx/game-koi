@@ -1,0 +1,97 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "description": [
+    "platformAutomerge is off deliberately. It hands the merge to GitHub's native",
+    "auto-merge, which is faster, but with no branch protection configured GitHub will",
+    "happily merge a PR whose checks have not started yet — which would make the whole",
+    "'only when tests are green' arrangement a no-op. Renovate's own automerge waits",
+    "for the branch checks itself, at the cost of merging on its next run rather than",
+    "the instant CI goes green. Turn this back on if you add a branch protection rule",
+    "requiring the ci.yml checks.",
+    "minimumReleaseAge gives someone else three days to find a broken release before we",
+    "take it unattended; see the game-koi rule below for the one exemption.",
+    "ignoreTests is false, which is also the default — stated outright because it is the",
+    "one flag that would quietly turn the whole gate off. With it false, Renovate waits",
+    "for *passing* check runs: a branch with failing checks is never merged, and neither",
+    "is one where the checks never ran at all (absence is not treated as success)."
+  ],
+  "ignoreTests": false,
+  "minimumReleaseAge": "3 days",
+  "automergeStrategy": "squash",
+  "platformAutomerge": false,
+  "packageRules": [
+    {
+      "description": [
+        "The docs site's game-koi dependency is the reason this file exists.",
+        "docs/ installs the emulator from the npm registry rather than from the",
+        "workspace, so nothing in the build can sync that number: it has to name a",
+        "version that is already published. A caret range on a 0.x version admits",
+        "patch bumps only (^0.2.0 means >=0.2.0 <0.3.0), so every minor release used",
+        "to strand the docs on the old line with a build that still went green.",
+        "rangeStrategy replace so the range itself moves, not just the lockfile.",
+        "minimumReleaseAge 0 because the waiting period is there to let someone else",
+        "discover a bad release first, and there is no someone else for our own",
+        "package — we published it, and the point is that the docs follow promptly."
+      ],
+      "matchManagers": ["npm"],
+      "matchFileNames": ["docs/package.json"],
+      "matchPackageNames": ["game-koi"],
+      "rangeStrategy": "replace",
+      "commitMessageTopic": "the docs site's game-koi",
+      "minimumReleaseAge": null,
+      "automerge": true
+    },
+    {
+      "description": [
+        "Automerge anything that is not a major, once CI is green. The gate is",
+        ".github/workflows/ci.yml: Renovate will not merge a branch whose checks are",
+        "failing or still running, so 'green' means the Rust workspace built, clippy",
+        "was clean, the unit tests passed, the npm package built and tested, and the",
+        "docs site built. What that does not cover is the Blargg/Mooneye ROM suites,",
+        "which skip themselves in CI because test-roms/ is gitignored — run",
+        "`just test-roms` locally after a batch of merges lands."
+      ],
+      "matchUpdateTypes": ["minor", "patch", "digest", "pin", "lockFileMaintenance"],
+      "automerge": true
+    },
+    {
+      "description": [
+        "Majors stay manual. CI passing means it compiles and the tests pass, which is",
+        "exactly what a behavioural change in a renamed API also does. Note that Rust",
+        "0.x crates get their breaking changes as *minors* and are automerged above —",
+        "that is deliberate, since those do reliably fail to compile; the ones where a",
+        "silent behaviour change is plausible are pinned outright below."
+      ],
+      "matchUpdateTypes": ["major"],
+      "automerge": false
+    },
+    {
+      "description": [
+        "egui, its two integration crates and pixels are one version set, not four",
+        "dependencies. The stats overlay borrows the wgpu Device and Queue that pixels",
+        "owns instead of creating its own, so both sides must compile against the same",
+        "wgpu: pixels 0.17.2 is on wgpu 29, and egui-wgpu 0.36 moved to wgpu 30.",
+        "Mismatching them links two semver-incompatible copies of wgpu and fails with",
+        "'expected wgpu::Device, found wgpu::Device'. Renovate cannot know which",
+        "combinations pair up, so it is left alone: move them together by hand and",
+        "check with `cargo tree -d`."
+      ],
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["egui", "egui-wgpu", "egui-winit", "pixels"],
+      "enabled": false
+    },
+    {
+      "description": [
+        "wasm-bindgen the crate must be the exact version of wasm-bindgen the CLI, or",
+        "the generated glue does not match the module's ABI. The CLI version lives in",
+        "three other places Renovate does not edit — build.sh, ci.yml and",
+        "npm-publish.yml's WASM_BINDGEN_VERSION — so a bump here alone would only trip",
+        "build.sh's own version check. Bump all four together by hand."
+      ],
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["wasm-bindgen"],
+      "enabled": false
+    }
+  ]
+}

@@ -86,7 +86,52 @@ build-docs:
 serve-docs: build-docs
     npm run preview
 
+# Point the docs site at the current release of the game-koi npm package.
+#
+# Renovate normally does this on its own (see renovate.json — it is the dependency that
+# config exists for); this is the impatient path, for when a release just went out and
+# the docs should reflect it now rather than at Renovate's next run.
+#
+# docs/ consumes `game-koi` from the registry rather than from crates/game-koi-web/js —
+# that is what makes its ROM-player page a test of the *published* package — so this is
+# the one version number in the repo that build.sh cannot sync, and the only one that
+# has to wait: it can only be moved once that version is actually on npm, i.e. after
+# the publish workflow has finished for the tag. The version still comes from
+# Cargo.toml, so the range is never hand-typed.
+#
+# Read out of the manifest with grep rather than `cargo pkgid` (which build.sh uses):
+# pkgid answers from Cargo.lock, so it reports the *previous* version until something
+# has built since the bump. build.sh gets away with it because a cargo build runs two
+# lines above; here there is nothing to refresh the lock, and the failure would be a
+# silently stale pin rather than an error.
+#
+# Why this exists at all: a caret range on a 0.x version admits patch bumps only
+# (^0.2.0 means >=0.2.0 <0.3.0), so every *minor* release silently leaves the docs on
+# the old line. That is how docs/package.json came to sit on 0.2.0 at 0.3.0.
+sync-docs-version:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    version=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
+    # --prefer-online because npm's metadata cache will happily report a release that
+    # landed minutes ago as nonexistent, and the check would then be backwards.
+    if ! npm view --prefer-online "game-koi@$version" version >/dev/null 2>&1; then
+      echo "game-koi@$version is not on the registry yet." >&2
+      echo "Publish it first (push the v$version tag), then run this again." >&2
+      exit 1
+    fi
+    cd docs
+    npm pkg set dependencies.game-koi="^$version"
+    # The lockfile has to move with it: readthedocs builds with `npm ci`, which refuses
+    # outright when the lock and package.json disagree rather than resolving anew.
+    npm install --package-lock-only --no-audit --no-fund
+    echo
+    echo "docs now ask for game-koi ^$version."
+    echo "Commit docs/package.json and docs/package-lock.json."
+
 # Tag main's committed version and push it (bump the version and commit it first).
+#
+# The docs site is not part of this: it tracks the *published* package, so bump it with
+# `just sync-docs-version` once the publish workflow has finished.
 tag:
     #!/usr/bin/env bash
     set -euo pipefail

@@ -315,6 +315,36 @@ canvas it draws into is `hidden` and still plays. Two things to know:
   That makes the ROM-player page an integration test of the *published* package, the same
   way the crate-root demo tests the locally built one — but it also means emulator changes
   only reach the docs after a release.
+
+  So `docs/package.json`'s `game-koi` range is the **one version number `build.sh` cannot
+  sync**, since it has to name a version that already exists on npm. **Renovate owns it**
+  (`renovate.json` at the repo root exists for this dependency first and foremost); `just
+  sync-docs-version` is the manual path for when a release just went out and waiting for
+  Renovate is annoying. It takes the version from `Cargo.toml`, refuses if it is not on the
+  registry yet, and refreshes `docs/package-lock.json` too — readthedocs builds with `npm
+  ci`, which fails outright when the lock and `package.json` disagree. **Never hand-edit
+  either file.**
+
+  This needs owning at all because a caret range on a `0.x` version admits patch bumps
+  only — `^0.2.0` means `>=0.2.0 <0.3.0` — so a *minor* release leaves the docs on the old
+  line silently, with a build that still passes. That is how the site sat on 0.2.0 while
+  the workspace was on 0.3.0.
+
+  Two dependency sets in `renovate.json` are **deliberately `enabled: false`**, with the
+  reasoning in the config: `egui`/`egui-wgpu`/`egui-winit`/`pixels` (one version set —
+  they must agree on wgpu, which Renovate cannot reason about) and `wasm-bindgen` (the
+  crate must match the CLI version, which lives in `build.sh`, `ci.yml` and
+  `npm-publish.yml` where Renovate does not look).
+
+  **Renovate automerges everything below a major once CI is green, so
+  `.github/workflows/ci.yml` is load-bearing** — a gap in it is not a missing test, it is
+  a class of breakage that merges unread. It runs on every PR in three jobs (Rust
+  workspace: fmt, `clippy -D warnings`, `cargo test`, the wasm build of the core; the npm
+  package: `build.sh` then `npm test`; the docs site: `npm ci` + build, which is what a
+  bad `game-koi` release would fail). `clippy` is `-D warnings` on purpose — with
+  automerge on, a warning nobody reads is a warning nobody will ever see. What CI does
+  *not* cover is the Blargg/Mooneye suites, since `test-roms/` is gitignored and they skip
+  themselves; run `just test-roms` locally after a batch of dependency merges.
 - **`RomPlayer.svelte` imports `game-koi` inside its event handler, not at module scope.**
   Vite still walks a component's static imports during `astro build`'s SSG pass even under
   `client:only`, and the package touches `AudioContext`/wasm/DOM as soon as it is

@@ -1,0 +1,141 @@
+name: CI
+
+# Runs on every pull request, and on main after a merge.
+#
+# This exists to be the thing Renovate waits for: `renovate.json` automerges updates
+# once the checks here are green, so a gap in this file is not a missing test, it is a
+# class of breakage that gets merged unread. Keep the three jobs matching the three
+# things that can break independently — the Rust workspace, the npm package, and the
+# docs site, which installs `game-koi` from the registry rather than from this tree.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# A new push supersedes the run in flight; nothing here talks to a registry, so there
+# is nothing to leave half-done by cancelling.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  WASM_BINDGEN_VERSION: "0.2.128"
+
+jobs:
+  rust:
+    name: rust
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # cpal links against ALSA and gilrs against libudev, both through build scripts
+      # that need the -dev packages present, not just the runtime libraries. Without
+      # them the failure is a pkg-config error from inside a build script, which reads
+      # like a Rust problem and isn't. Required even for `cargo test`, since
+      # game-koi-desktop is part of the workspace.
+      - name: Install the desktop crate's system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libudev-dev pkg-config
+
+      - name: Add the wasm target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            target
+          key: ${{ runner.os }}-cargo-ci-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-ci-
+
+      - run: cargo fmt --all --check
+
+      # -D warnings on purpose: a lint gate that cannot fail is decoration, and with
+      # automerge on, warnings nobody reads are warnings nobody will ever see.
+      - run: cargo clippy --all-targets --workspace -- -D warnings
+
+      # Unit tests only. The Blargg and Mooneye suites skip themselves when test-roms/
+      # is absent, and it is gitignored, so a green run here says nothing about them —
+      # they stay a local check (`just test-roms`).
+      - run: cargo test --workspace
+
+      # The core must keep compiling for the browser unchanged; that is the constraint
+      # the whole crate split exists to protect, and nothing else in CI would notice a
+      # std::time or std::fs call sneaking in.
+      - run: cargo build -p game-koi-core --target wasm32-unknown-unknown
+
+  web:
+    name: npm package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Add the wasm target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/bin
+            target
+          key: ${{ runner.os }}-cargo-web-${{ env.WASM_BINDGEN_VERSION }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-web-${{ env.WASM_BINDGEN_VERSION }}-
+
+      - name: Install wasm-bindgen-cli
+        # Must match the `wasm-bindgen` crate version exactly — build.sh checks this
+        # itself and refuses on a mismatch. Cached above by version, so this is a no-op
+        # after the first run.
+        run: |
+          if ! command -v wasm-bindgen >/dev/null || \
+             [ "$(wasm-bindgen --version | awk '{print $2}')" != "$WASM_BINDGEN_VERSION" ]; then
+            cargo install wasm-bindgen-cli --version "$WASM_BINDGEN_VERSION" --force
+          fi
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: crates/game-koi-web/js/package-lock.json
+
+      # The package's tests import the compiled dist/, and tsc needs wasm-bindgen's
+      # generated .d.ts to typecheck src/, so the full build has to run first. This is
+      # the same script the publish workflow uses.
+      - name: Build the core, the wasm bindings, and the npm package
+        run: ./crates/game-koi-web/build.sh
+
+      - name: Run the npm package's tests
+        working-directory: crates/game-koi-web/js
+        run: npm test
+
+  docs:
+    name: docs site
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: docs/package-lock.json
+
+      # `npm ci` rather than `npm install`, because that is what readthedocs.com runs
+      # (see .readthedocs.yaml) — it fails outright when the lockfile and package.json
+      # disagree, which is exactly the breakage worth catching in a dependency PR.
+      - name: Install
+        working-directory: docs
+        run: npm ci
+
+      # Astro's SSG pass is where a `game-koi` bump would show up: the site installs the
+      # emulator from the registry, and RomPlayer.svelte's import of it is load-bearing
+      # enough that a broken release fails the build rather than just the page.
+      - name: Build
+        working-directory: docs
+        run: npm run build

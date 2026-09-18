@@ -372,11 +372,16 @@ impl App {
         };
         // Expand one shade per pixel into RGBA.
         let frame = pixels.frame_mut();
+        // as_chunks_mut gives `&mut [u8; 4]` per pixel, which is what PALETTE's entries
+        // already are — so this is an assignment rather than a length-checked copy. The
+        // buffer is 4 bytes per pixel, so the `.1` remainder is empty by construction.
         for (pixel, &shade) in frame
-            .chunks_exact_mut(4)
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
             .zip(self.bus.ppu.framebuffer().iter())
         {
-            pixel.copy_from_slice(&PALETTE[(shade & 0x03) as usize]);
+            *pixel = PALETTE[(shade & 0x03) as usize];
         }
     }
 }

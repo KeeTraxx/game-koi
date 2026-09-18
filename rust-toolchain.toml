@@ -1,0 +1,18 @@
+# The one Rust version this project builds and lints with, everywhere. rustup reads this
+# file and switches to it for any cargo/rustc invocation inside the repo, so a laptop and
+# a CI runner cannot quietly disagree about what "stable" means.
+#
+# Pinned because CI fails on clippy warnings and a new stable brings new lints: 1.98 added
+# clippy::chunks_exact_to_as_chunks, which turned main red with nobody having touched the
+# code — and, with Renovate automerging on green, silently stopped every dependency PR
+# from merging too. Bumping the channel is now a deliberate commit, where a new lint shows
+# up in a diff someone reads rather than in a CI run nobody expected.
+#
+# The trade is that new lints no longer arrive on their own. Bump this on purpose now and
+# then; the fixes are usually one line and worth reading.
+[toolchain]
+channel = "1.98.0"
+components = ["clippy", "rustfmt"]
+# Declared here so the browser build works from a fresh clone without a separate
+# `rustup target add` — the core is required to keep compiling for wasm32.
+targets = ["wasm32-unknown-unknown"]

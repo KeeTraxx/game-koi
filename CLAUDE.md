@@ -356,7 +356,16 @@ Version control is **jj (Jujutsu)** colocated with git (both `.jj/` and `.git/` 
 
 ## Commands
 
-Rust 1.95, edition 2024.
+Rust **1.98.0, pinned in `rust-toolchain.toml`**, edition 2024. rustup switches to it for
+any cargo invocation inside the repo, and installs `clippy`, `rustfmt` and the
+`wasm32-unknown-unknown` target on first use — so a fresh clone needs no `rustup target
+add`, and CI cannot be linting against a different version than you are.
+
+The pin exists because CI runs `clippy -D warnings`: a new stable brings new lints, and
+1.98's `chunks_exact_to_as_chunks` turned main red with nobody having touched the code
+(and, with Renovate automerging on green, stopped every dependency PR merging too).
+Bumping the channel is a deliberate commit. Nothing stops you testing a newer toolchain
+with `cargo +1.99.0 clippy ...` before you do.
 
 **System libraries.** Two host-side dependencies link against C libraries and need their `-dev` packages
 present at build time, not just the runtime library every desktop already has — without them `cargo build`

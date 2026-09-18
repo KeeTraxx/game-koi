@@ -108,6 +108,7 @@ serve-docs: build-docs
 # Why this exists at all: a caret range on a 0.x version admits patch bumps only
 # (^0.2.0 means >=0.2.0 <0.3.0), so every *minor* release silently leaves the docs on
 # the old line. That is how docs/package.json came to sit on 0.2.0 at 0.3.0.
+[doc("Point the docs site at the current published game-koi release")]
 sync-docs-version:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -128,10 +129,106 @@ sync-docs-version:
     echo "docs now ask for game-koi ^$version."
     echo "Commit docs/package.json and docs/package-lock.json."
 
+# --- releasing ----------------------------------------------------------------
+
+# Cut a release: everything after the version bump (RELEASE.md steps 2-5).
+#
+# Step 1 stays yours — edit `workspace.package.version` in Cargo.toml, then run this.
+# It refreshes the derived files, runs what CI would run, commits the lot as one commit,
+# pushes main, and tags. That tag is what publishes to npm, so the checks up front are
+# the point of the recipe as much as the automation is: a version number that reaches
+# the registry can never be reused, so the cheap moment to catch a mistake is now.
+#
+# `just release yes` skips the confirmation prompt.
+[doc("Cut a release: refresh, verify, commit, tag, push (RELEASE.md steps 2-5)")]
+release confirm="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    version=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
+    echo "releasing $version"
+
+    # Refuse to reuse a published version. npm reserves a version number permanently —
+    # even unpublishing does not free it — so this is not recoverable after the fact,
+    # only avoidable before it.
+    if npm view --prefer-online "game-koi@$version" version >/dev/null 2>&1; then
+      echo >&2
+      echo "game-koi@$version is already on npm, and npm never takes a version twice." >&2
+      echo "Bump Cargo.toml to the next version and run this again." >&2
+      exit 1
+    fi
+
+    if git ls-remote --exit-code --tags origin "v$version" >/dev/null 2>&1; then
+      echo "tag v$version already exists on origin — pick the next version." >&2
+      exit 1
+    fi
+
+    # main has to be an ancestor of the working copy, or `jj bookmark set main -r @-`
+    # below would move the bookmark sideways onto a line of work that was never merged.
+    if [ -z "$(jj log --no-graph -r 'main & ::@' -T 'commit_id')" ]; then
+      echo "main is not an ancestor of the working copy; rebase before releasing." >&2
+      exit 1
+    fi
+
+    # Only the version bump and the files derived from it belong in this commit. Anything
+    # else in the working copy would be swept into "chore: bump to X" silently, which is
+    # how a release ends up carrying a change nobody reviewed.
+    changed=$(jj diff --summary | awk '{print $2}')
+    if ! echo "$changed" | grep -qx 'Cargo.toml'; then
+      echo "Cargo.toml is unchanged — bump the version first (RELEASE.md step 1)." >&2
+      exit 1
+    fi
+    for file in $changed; do
+      case "$file" in
+        Cargo.toml|Cargo.lock) ;;
+        crates/game-koi-web/js/package.json|crates/game-koi-web/js/package-lock.json) ;;
+        *)
+          echo "unrelated change in the working copy: $file" >&2
+          echo "commit or revert it before releasing." >&2
+          exit 1
+          ;;
+      esac
+    done
+
+    # Step 2: the derived files. build.sh refuses without the matching wasm-bindgen CLI,
+    # which is the right answer here — a release should ship a package that was actually
+    # built, not one CI is the first to compile.
+    just build-web
+
+    # What the publish workflow runs, run before the tag rather than after it. A tag that
+    # fails CI has already spent its version number.
+    cargo test --workspace
+    just test-web
+
+    echo
+    jj diff --stat
+    echo
+    if [ "{{ confirm }}" != "yes" ]; then
+      read -r -p "tag and push v$version? this publishes to npm. [y/N] " reply
+      case "$reply" in
+        [yY]*) ;;
+        *) echo "aborted — nothing committed, nothing pushed."; exit 1 ;;
+      esac
+    fi
+
+    # Steps 3 and 5. `jj commit` finalizes whatever is on disk *now*, which is why the
+    # build above had to finish first.
+    jj commit -m "chore: bump to $version"
+    jj bookmark set main -r @-
+    jj git push
+    just tag
+
+    echo
+    echo "tagged v$version and pushed. CI publishes it: gh run watch, or the Actions tab."
+    echo 'the docs site follows once it lands — Renovate, or `just sync-docs-version`.'
+
 # Tag main's committed version and push it (bump the version and commit it first).
+#
+# Usually reached through `just release` rather than run directly.
 #
 # The docs site is not part of this: it tracks the *published* package, so bump it with
 # `just sync-docs-version` once the publish workflow has finished.
+[doc("Tag main's committed version and push it — usually via `just release`")]
 tag:
     #!/usr/bin/env bash
     set -euo pipefail

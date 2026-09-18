@@ -381,8 +381,12 @@ fn params_bytes(image: (u32, u32, u32, u32), period: f32, strength: f32) -> [u8;
     ];
 
     let mut bytes = [0u8; PARAMS_SIZE];
-    for (chunk, value) in bytes.chunks_exact_mut(4).zip(values) {
-        chunk.copy_from_slice(&value.to_ne_bytes());
+    // as_chunks_mut rather than chunks_exact_mut: the chunk size is a constant, so each
+    // chunk comes back as a `&mut [u8; 4]` and the write is a plain assignment with no
+    // length check to elide. PARAMS_SIZE is a multiple of 4, so the `.1` remainder is
+    // empty by construction.
+    for (chunk, value) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(values) {
+        *chunk = value.to_ne_bytes();
     }
     bytes
 }

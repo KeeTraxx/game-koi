@@ -6,5 +6,5 @@ members = ["crates/game-koi-core", "crates/game-koi-desktop", "crates/game-koi-w
 # the version the `game-koi` npm package publishes as — build.sh syncs it into
 # crates/game-koi-web/js/package.json, so that file's version is never hand-edited.
 [workspace.package]
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"

@@ -294,7 +294,10 @@ whatever lands in `$READTHEDOCS_OUTPUT/html`. Astro was picked over Sphinx/MkDoc
 the example pages embed *running* JavaScript rather than screenshots, and over
 Docusaurus/VitePress because those bind interactive components to React and Vue
 respectively — Astro's islands let a Svelte component and a bare Three.js script each
-hydrate on their own page of the same otherwise-static site. Two things to know:
+hydrate on their own page of the same otherwise-static site. The Three.js page feeds the
+emulator's canvas to a `CanvasTexture` and maps it onto a model, which works precisely
+because the package's keyboard listeners are on `window` rather than the canvas: the
+canvas it draws into is `hidden` and still plays. Two things to know:
 
 - **The site consumes `game-koi` from the npm registry, not from `crates/game-koi-web/js/`.**
   That makes the ROM-player page an integration test of the *published* package, the same

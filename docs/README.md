@@ -6,8 +6,9 @@ on readthedocs.com.
 
 Astro was chosen over Sphinx/MkDocs because the example pages embed real, running
 JavaScript: the ROM player is the published `game-koi` package hydrated as a Svelte
-island, and the Three.js page is a plain client-side script. Astro's islands let both
-live on the same static site without either becoming a single-page app.
+island, and the Three.js page is a plain client-side script that feeds the emulator's
+canvas into a 3D scene as a texture. Astro's islands let both live on the same static
+site without either becoming a single-page app.
 
 readthedocs.com builds this through `build.commands` in the repo's `.readthedocs.yaml`
 rather than a Sphinx/MkDocs builder — it runs `npm ci && npm run build` here and serves

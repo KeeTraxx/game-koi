@@ -18,7 +18,7 @@ export default defineConfig({
                 label: 'Examples',
                 items: [
                     { label: 'ROM player', slug: 'examples/rom-player' },
-                    { label: 'Three.js island', link: '/examples/threejs/' },
+                    { label: 'Three.js scene', link: '/examples/threejs/' },
                 ],
             },
         ],

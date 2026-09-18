@@ -12,8 +12,27 @@ import { GameKoi } from "./js/dist/index.js";
 const canvas = document.getElementById("screen");
 const statusEl = document.getElementById("status");
 const fileInput = document.getElementById("rom");
+const buttonsEl = document.getElementById("buttons");
 
 let koi = null;
+
+// One pill per button, lit from the emulator's press/release events. Whichever device
+// produced the edge — keyboard, gamepad, or a press() call — arrives the same way here.
+const BUTTONS = ["up", "down", "left", "right", "a", "b", "start", "select"];
+const pills = new Map(
+  BUTTONS.map((button) => {
+    const el = document.createElement("span");
+    el.textContent = button;
+    buttonsEl.append(el);
+    return [button, el];
+  }),
+);
+
+/** Redraws from the event's snapshot rather than toggling one pill, so the display
+    cannot drift out of step with the joypad however the edges arrive. */
+function showPressed(pressed) {
+  for (const [button, el] of pills) el.classList.toggle("held", pressed.has(button));
+}
 
 fileInput.addEventListener("change", async (event) => {
   const file = event.target.files[0];
@@ -25,6 +44,8 @@ fileInput.addEventListener("change", async (event) => {
       koi.loadRom(rom);
     } else {
       koi = await GameKoi.create({ canvas, rom });
+      koi.on("press", (event) => showPressed(event.pressed));
+      koi.on("release", (event) => showPressed(event.pressed));
     }
     statusEl.textContent = `running ${file.name}`;
   } catch (err) {

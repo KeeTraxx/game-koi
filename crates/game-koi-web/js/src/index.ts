@@ -11,8 +11,17 @@
 import init, { Emulator } from "../wasm/game_koi_web.js";
 import { WORKLET_SOURCE } from "./worklet.js";
 import { DEFAULT_GAMEPAD_MAP, GamepadInput, type Action } from "./gamepad.js";
+import { Emitter, type ButtonSource, type GameKoiEvents } from "./events.js";
 import { FrameStats } from "./stats.js";
 import { StatsOverlay } from "./overlay.js";
+
+export type {
+  ButtonEvent,
+  ButtonSource,
+  GameKoiEvents,
+  Listener,
+  Unsubscribe,
+} from "./events.js";
 
 export type Button = "up" | "down" | "left" | "right" | "a" | "b" | "start" | "select";
 
@@ -81,6 +90,9 @@ export class GameKoi {
   private readonly targetBuffer: number;
   private readonly maxFramesPerWake: number;
   private readonly stats: FrameStats;
+  private readonly emitter = new Emitter<GameKoiEvents>();
+  /** What the joypad currently has down, whichever device put it there. */
+  private readonly held = new Set<Button>();
   private emulator: Emulator;
   private buffered = 0;
   /** Cumulative worklet counters, as last reported. See `worklet.ts`. */
@@ -180,20 +192,87 @@ export class GameKoi {
 
   /** Swaps in a new ROM, keeping the same canvas and audio graph. */
   loadRom(rom: Uint8Array): void {
-    // The new machine's joypad starts with nothing held, so the snapshot of what is
-    // held has to start over too or the first poll will emit no press for a direction
-    // that was already down.
+    // The new machine's joypad starts with nothing held, so what this side believes is
+    // held has to start over too — both the gamepad's snapshot (or the first poll would
+    // emit no press for a direction that was already down) and the set the events are
+    // edges against (or a button "already held" would never be pressed on the new
+    // machine, and a display would show it stuck down).
     this.gamepad?.releaseAll();
+    this.releaseAll();
     this.emulator.free();
     this.emulator = new Emulator(rom, this.audioContext.sampleRate);
   }
 
   press(button: Button): void {
-    this.emulator.press(button);
+    this.setButton(button, true, "api");
   }
 
   release(button: Button): void {
-    this.emulator.release(button);
+    this.setButton(button, false, "api");
+  }
+
+  /** Everything the joypad has down right now — a snapshot, safe to keep. */
+  get pressed(): ReadonlySet<Button> {
+    return new Set(this.held);
+  }
+
+  /**
+   * Listens for button edges, from any input path — the built-in keyboard and gamepad
+   * handling as well as `press`/`release` calls.
+   *
+   * Returns a function that removes the listener again:
+   *
+   * ```ts
+   * const stop = koi.on("press", ({ button, pressed }) => render(pressed));
+   * koi.on("release", ({ button, pressed }) => render(pressed));
+   * ```
+   *
+   * Only *changes* are reported: a key held down with autorepeat, a stick resting past
+   * the threshold, or `press("a")` twice in a row each produce one `press` event and no
+   * `release` until the button actually comes up.
+   */
+  on<K extends keyof GameKoiEvents>(
+    type: K,
+    listener: (event: GameKoiEvents[K]) => void,
+  ): () => void {
+    return this.emitter.on(type, listener);
+  }
+
+  /** Removes a listener registered with {@link on}. */
+  off<K extends keyof GameKoiEvents>(
+    type: K,
+    listener: (event: GameKoiEvents[K]) => void,
+  ): void {
+    this.emitter.off(type, listener);
+  }
+
+  /**
+   * The one path to the emulated joypad, so every device's edges are counted once.
+   *
+   * A repeat is dropped here rather than forwarded: `Joypad::press` is idempotent, so
+   * skipping it changes nothing for the machine, and it is what makes the events edges
+   * instead of a restatement of whatever the browser felt like repeating.
+   */
+  private setButton(button: Button, pressed: boolean, source: ButtonSource): void {
+    if (this.held.has(button) === pressed) return;
+
+    if (pressed) {
+      this.held.add(button);
+      this.emulator.press(button);
+    } else {
+      this.held.delete(button);
+      this.emulator.release(button);
+    }
+    this.emitter.emit(pressed ? "press" : "release", {
+      button,
+      source,
+      pressed: new Set(this.held),
+    });
+  }
+
+  /** Lets go of everything held, emitting the releases. */
+  private releaseAll(): void {
+    for (const button of [...this.held]) this.setButton(button, false, "api");
   }
 
   /**
@@ -234,6 +313,7 @@ export class GameKoi {
     cancelAnimationFrame(this.rafHandle);
     this.detachKeyboard();
     if (this.overlayListener) removeEventListener("keydown", this.overlayListener);
+    this.emitter.clear();
     this.overlay?.dispose();
     this.emulator.free();
     this.worklet.disconnect();
@@ -346,8 +426,7 @@ export class GameKoi {
 
   private applyGamepadActions(actions: Action[] | undefined): void {
     for (const action of actions ?? []) {
-      if (action.type === "press") this.press(action.button);
-      else this.release(action.button);
+      this.setButton(action.button, action.type === "press", "gamepad");
     }
   }
 
@@ -355,14 +434,16 @@ export class GameKoi {
     this.keydownListener = (event: KeyboardEvent) => {
       const button = this.keymap?.[event.code];
       if (button) {
-        this.press(button);
+        // Autorepeat still arrives here: `preventDefault` has to run on every repeat,
+        // and `setButton` is what collapses them into the one press edge.
+        this.setButton(button, true, "keyboard");
         event.preventDefault();
       }
     };
     this.keyupListener = (event: KeyboardEvent) => {
       const button = this.keymap?.[event.code];
       if (button) {
-        this.release(button);
+        this.setButton(button, false, "keyboard");
         event.preventDefault();
       }
     };

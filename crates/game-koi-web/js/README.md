@@ -50,6 +50,33 @@ the page:
   binding them would be confidently wrong rather than merely absent. Use
   `gamepadMap: null` and your own polling for such a pad.
 
+### Button events
+
+`koi.on("press" | "release", listener)` reports button edges from every input path —
+the built-in keyboard and gamepad handling as well as your own `press`/`release` calls —
+so an on-screen joypad can mirror whatever is driving the emulator:
+
+```ts
+const stop = koi.on("press", ({ button, source, pressed }) => {
+  // button: the one that changed. source: "keyboard" | "gamepad" | "api".
+  // pressed: everything held after this edge, as a Set — render straight from it.
+  render(pressed);
+});
+koi.on("release", ({ pressed }) => render(pressed));
+
+stop(); // or koi.off("press", listener)
+```
+
+Only *changes* are reported. A key held down with autorepeat, a stick resting past the
+threshold, and `press("a")` called twice each produce one `press` event and nothing more
+until the button comes up — so a listener never has to de-duplicate. `koi.pressed` gives
+the same set on demand, for a display built after the fact.
+
+Two cases release without anyone letting go: `loadRom()` releases everything (as
+`"api"`), since the new machine's joypad starts empty, and `pause()` releases whatever
+the gamepad was holding (as `"gamepad"`), since polling stops and nothing else would.
+Keys keep their own `keyup` while paused. `dispose()` drops every listener.
+
 ### Debug overlay
 
 Press <kbd>`</kbd> (backtick) to toggle a stats panel over the canvas, or call
@@ -90,6 +117,10 @@ element. Pass `overlayKey: null` to bind no key.
 - `koi.loadRom(rom)` — swaps in a new ROM, keeping the same canvas and audio setup.
 - `koi.press(button)` / `koi.release(button)` — `Button` is one of `"up"`, `"down"`,
   `"left"`, `"right"`, `"a"`, `"b"`, `"start"`, `"select"`.
+- `koi.on(type, listener)` / `koi.off(type, listener)` — `"press"` and `"release"`
+  button edges, from any input path. `on` returns a function that unsubscribes. The
+  payload is `{ button, source: "keyboard" | "gamepad" | "api", pressed: Set<Button> }`.
+- `koi.pressed` — everything held right now, as a `Set<Button>` snapshot.
 - `koi.toggleOverlay()` / `koi.overlayVisible` — the debug stats panel.
 - `koi.pause()` / `koi.resume()`.
 - `koi.dispose()` — stops the loop and tears down the audio graph. Call this before

@@ -20,6 +20,15 @@
   }
   #status { min-height: 1.5em; color: #88c070; }
   kbd { background: #2a3238; border-radius: 3px; padding: 0 4px; }
+  /* Lit from the press/release events, so this doubles as a check that they fire for
+     every input path — keyboard, gamepad, and the page's own press()/release(). */
+  #buttons { display: flex; gap: 0.4rem; }
+  #buttons span {
+    background: #2a3238; border: 1px solid #3a444c; border-radius: 3px;
+    padding: 0 6px; text-transform: uppercase;
+    transition: background 60ms, color 60ms;
+  }
+  #buttons span.held { background: #88c070; color: #081820; border-color: #88c070; }
 </style>
 </head>
 <body>
@@ -27,6 +36,7 @@
   <input type="file" id="rom" accept=".gb">
   <canvas id="screen" width="160" height="144"></canvas>
   <div id="status">loading…</div>
+  <div id="buttons"></div>
   <div>
     <kbd>←↑→↓</kbd> d-pad · <kbd>Z</kbd> A · <kbd>X</kbd> B ·
     <kbd>Enter</kbd> Start · <kbd>RShift</kbd> Select · <kbd>`</kbd> stats

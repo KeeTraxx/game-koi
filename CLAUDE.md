@@ -67,11 +67,23 @@ relocation, not a redesign:
   connected pad driving the one player — with two browser-specific differences: the
   Gamepad API reports **+Y as down** (gilrs reports +Y as up), and pads whose `mapping`
   is not `"standard"` are skipped entirely, since an unrecognised layout's indices are
-  whatever the driver enumerated. `gamepad.ts` is pure — snapshots in, edges out — and
-  is the one part of the package with unit tests: `js/test/*.test.js`, plain JS against
-  the compiled `dist/` so there is no test-only toolchain and nothing test-shaped in the
-  published package. `npm test` (or `just test-web`) builds and runs them; CI runs them
-  before publishing.
+  whatever the driver enumerated. `gamepad.ts` is pure — snapshots in, edges out — which
+  is what makes it testable; the tested modules are exactly the pure ones (`gamepad.ts`,
+  `stats.ts`, `events.ts`), in `js/test/*.test.js`, plain JS against the compiled `dist/`
+  so there is no test-only toolchain and nothing test-shaped in the published package.
+  `npm test` (or `just test-web`) builds and runs them; CI runs them before publishing.
+
+  **Both input devices and the page's own `press`/`release` funnel through one private
+  `setButton`, which is also what emits the `press`/`release` events** (`js/src/events.ts`
+  — a small typed `on`/`off` emitter, not `EventTarget`, so the payload types without
+  casts and the module imports no DOM global). `GameKoi` holds the set of what is down,
+  so the events are *edges*: keyboard autorepeat, a stick resting past the threshold and
+  a doubled `press` call each collapse to one event, and the payload carries `source`
+  plus a snapshot of everything held after the edge. Two consequences worth keeping:
+  `loadRom` must release everything first (the new machine's joypad is empty, and a
+  button left in the held set would never be re-pressed on it), and `emit` isolates each
+  listener in a `try`, since these fire from inside a `keydown` handler and the rAF loop
+  where a throwing listener would otherwise kill the emulation loop.
 
   **The stats overlay is a DOM panel, not egui** (`js/src/overlay.ts` +
   `js/src/stats.ts`, toggled with **`** — the same key the desktop uses). The desktop's

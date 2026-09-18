@@ -1,0 +1,31 @@
+{
+  "name": "game-koi-docs",
+  "type": "module",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "astro dev",
+    "start": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "astro": "astro"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "^0.42.1",
+    "@astrojs/svelte": "^9.0.1",
+    "astro": "^7.2.10",
+    "game-koi": "^0.2.0",
+    "sharp": "^0.35.3",
+    "svelte": "^5.57.0",
+    "three": "^0.186.0",
+    "typescript": "^6.0.3"
+  },
+  "allowScripts": {
+    "esbuild": true
+  },
+  "devDependencies": {
+    "@astrojs/check": "^0.9.10",
+    "@types/three": "^0.186.0",
+    "svelte-check": "^4.7.6"
+  }
+}

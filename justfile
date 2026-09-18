@@ -68,6 +68,24 @@ npm-dry-run: build-web
 npm-publish: build-web
     npm publish --access public
 
+# --- docs --------------------------------------------------------------------
+
+# Build the Astro/Starlight docs site (docs/dist/).
+[working-directory: 'docs']
+build-docs:
+    npm install --no-audit --no-fund
+    npm run build
+
+# Build the docs and preview the built output at http://localhost:4321/.
+#
+# Runs `astro preview` against docs/dist rather than `astro dev`, so this is what a
+# readthedocs.com build actually ships — catches issues (like a static top-level
+# `import` of `game-koi` sneaking into an island) that only show up post-build, not in
+# the dev server.
+[working-directory: 'docs']
+serve-docs: build-docs
+    npm run preview
+
 # Tag main's committed version and push it (bump the version and commit it first).
 tag:
     #!/usr/bin/env bash

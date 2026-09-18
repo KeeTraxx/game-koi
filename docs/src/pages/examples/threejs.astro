@@ -1,0 +1,58 @@
+---
+import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
+---
+
+<StarlightPage
+	frontmatter={{
+		title: 'Three.js island',
+		description: 'A plain Three.js scene, proving the islands model works for any library.',
+	}}
+>
+	<p>
+		This page is outside the docs content collection (it's an <code>.astro</code> page
+		using Starlight's <code>StarlightPage</code> wrapper), which is what lets it drive a
+		plain <code>&lt;script type="module"&gt;</code> instead of a framework component. It
+		exists to show that Astro's islands aren't tied to Svelte — see the <a
+			href="/examples/rom-player/">ROM player</a
+		> for that side of things — any library that can run client-side, including one with
+		no framework at all, can hydrate independently on its own page of the same static
+		site.
+	</p>
+
+	<canvas id="cube" width="480" height="360"></canvas>
+</StarlightPage>
+
+<style>
+	canvas {
+		display: block;
+		border: 1px solid var(--sl-color-gray-5);
+		border-radius: 0.25rem;
+	}
+</style>
+
+<script>
+	import * as THREE from 'three';
+
+	const canvas = document.getElementById('cube') as HTMLCanvasElement;
+
+	const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+	renderer.setSize(canvas.width, canvas.height, false);
+
+	const scene = new THREE.Scene();
+	const camera = new THREE.PerspectiveCamera(60, canvas.width / canvas.height, 0.1, 100);
+	camera.position.z = 3;
+
+	const cube = new THREE.Mesh(
+		new THREE.BoxGeometry(1.5, 1.5, 1.5),
+		new THREE.MeshNormalMaterial(),
+	);
+	scene.add(cube);
+
+	function tick() {
+		cube.rotation.x += 0.01;
+		cube.rotation.y += 0.013;
+		renderer.render(scene, camera);
+		requestAnimationFrame(tick);
+	}
+	tick();
+</script>

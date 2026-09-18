@@ -284,6 +284,28 @@ hundred milliseconds and averaging that into a short run makes the rate look muc
 value), so bulk VRAM writes are silently dropped during mode 3. Turn the LCD off first, as real ROMs do —
 the symptom is a uniformly blank screen with no error.
 
+`docs/` is the **documentation site** — Astro + Starlight, hosted on readthedocs.com. It is
+not a Cargo crate and sits outside `crates/`. `just build-docs` builds it; `just serve-docs`
+builds and then serves `dist/` (i.e. what readthedocs actually ships, not the dev server).
+
+readthedocs.com is **not restricted to Sphinx/MkDocs**: `.readthedocs.yaml` uses
+`build.commands`, which runs arbitrary shell (here `npm ci && npm run build`) and serves
+whatever lands in `$READTHEDOCS_OUTPUT/html`. Astro was picked over Sphinx/MkDocs because
+the example pages embed *running* JavaScript rather than screenshots, and over
+Docusaurus/VitePress because those bind interactive components to React and Vue
+respectively — Astro's islands let a Svelte component and a bare Three.js script each
+hydrate on their own page of the same otherwise-static site. Two things to know:
+
+- **The site consumes `game-koi` from the npm registry, not from `crates/game-koi-web/js/`.**
+  That makes the ROM-player page an integration test of the *published* package, the same
+  way the crate-root demo tests the locally built one — but it also means emulator changes
+  only reach the docs after a release.
+- **`RomPlayer.svelte` imports `game-koi` inside its event handler, not at module scope.**
+  Vite still walks a component's static imports during `astro build`'s SSG pass even under
+  `client:only`, and the package touches `AudioContext`/wasm/DOM as soon as it is
+  evaluated. A top-level import fails the *build*, not just the dev server — and the error
+  names the DOM global, not the import, so it reads like an Astro bug.
+
 Version control is **jj (Jujutsu)** colocated with git (both `.jj/` and `.git/` exist). Use `jj` commands
 (`jj st`, `jj log`, `jj diff`) rather than `git` ones. The git repo has no commits yet; history lives in jj.
 

@@ -1,0 +1,39 @@
+---
+title: game-koi
+description: A Game Boy (DMG) emulator written in Rust, compiled to WebAssembly.
+template: splash
+hero:
+  tagline: A from-scratch Game Boy (DMG) emulator, written in Rust, compiled to WebAssembly, wrapped in a small TypeScript API.
+  actions:
+    - text: Get started
+      link: /getting-started/
+      icon: right-arrow
+    - text: ROM player example
+      link: /examples/rom-player/
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+## What is this
+
+`game-koi` is a Game Boy emulator core written in Rust as a learning exercise, with a
+desktop build (winit/pixels/cpal/gilrs) and a browser build compiled to WebAssembly and
+published to npm as the `game-koi` package. This site documents the npm package and
+shows it running.
+
+<CardGrid stagger>
+	<Card title="Get started" icon="rocket">
+		Install `game-koi` and drop it into a page — see [Getting
+		started](/getting-started/).
+	</Card>
+	<Card title="ROM player" icon="laptop">
+		A real, running embed of the published package, driven by a Svelte
+		component — see [Examples: ROM player](/examples/rom-player/).
+	</Card>
+	<Card title="Three.js island" icon="puzzle">
+		Proof that Astro's islands aren't tied to one framework — see
+		[Examples: Three.js](/examples/threejs/).
+	</Card>
+</CardGrid>

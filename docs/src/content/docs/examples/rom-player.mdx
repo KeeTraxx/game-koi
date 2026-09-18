@@ -1,0 +1,20 @@
+---
+title: ROM player
+description: A live embed of the published game-koi npm package.
+---
+
+import RomPlayer from '../../../components/RomPlayer.svelte';
+
+This is the actual `game-koi` npm package — the same one from
+[Getting started](/getting-started/) — installed from the public registry and running
+in a Svelte component, not a screenshot.
+
+No ROM ships with this page: Blargg's and Mooneye's test ROMs are copyrighted and are
+not redistributed here, and neither is any commercial ROM. Pick a `.gb` file from your
+own machine below.
+
+<RomPlayer client:only="svelte" />
+
+Nothing is uploaded — the file is read directly into the emulator running in this tab.
+Audio starts only after your click, since browsers refuse to start an `AudioContext`
+without a user gesture.

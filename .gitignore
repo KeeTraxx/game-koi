@@ -5,3 +5,6 @@
 /crates/game-koi-web/js/wasm
 /crates/game-koi-web/js/dist
 /crates/game-koi-web/js/node_modules
+/docs/node_modules
+/docs/dist
+/docs/.astro

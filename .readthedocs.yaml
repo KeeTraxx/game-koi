@@ -1,0 +1,11 @@
+version: 2
+
+build:
+  os: ubuntu-24.04
+  tools:
+    nodejs: "22"
+  commands:
+    - cd docs && npm ci
+    - cd docs && npm run build
+    - mkdir -p $READTHEDOCS_OUTPUT/html
+    - cp -r docs/dist/* $READTHEDOCS_OUTPUT/html/

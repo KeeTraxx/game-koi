@@ -2,13 +2,13 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["config:recommended"],
   "description": [
-    "platformAutomerge is off deliberately. It hands the merge to GitHub's native",
-    "auto-merge, which is faster, but with no branch protection configured GitHub will",
-    "happily merge a PR whose checks have not started yet — which would make the whole",
-    "'only when tests are green' arrangement a no-op. Renovate's own automerge waits",
-    "for the branch checks itself, at the cost of merging on its next run rather than",
-    "the instant CI goes green. Turn this back on if you add a branch protection rule",
-    "requiring the ci.yml checks.",
+    "platformAutomerge hands the merge to GitHub's native auto-merge, which fires the",
+    "instant the checks pass rather than on Renovate's next run. It is only safe with a",
+    "branch protection rule in place: with none, GitHub will merge a PR whose checks",
+    "have not started yet, which would make the whole 'only when tests are green'",
+    "arrangement a no-op. main requires the rust, npm package and docs site checks",
+    "(enforce_admins off, so direct pushes for a release still work), so it is on.",
+    "Take it back out if that protection rule is ever removed.",
     "minimumReleaseAge gives someone else three days to find a broken release before we",
     "take it unattended; see the game-koi rule below for the one exemption.",
     "ignoreTests is false, which is also the default — stated outright because it is the",
@@ -19,7 +19,7 @@
   "ignoreTests": false,
   "minimumReleaseAge": "3 days",
   "automergeStrategy": "squash",
-  "platformAutomerge": false,
+  "platformAutomerge": true,
   "packageRules": [
     {
       "description": [

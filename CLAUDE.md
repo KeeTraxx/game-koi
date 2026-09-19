@@ -309,7 +309,32 @@ respectively — Astro's islands let a Svelte component and a bare Three.js scri
 hydrate on their own page of the same otherwise-static site. The Three.js page feeds the
 emulator's canvas to a `CanvasTexture` and maps it onto a model, which works precisely
 because the package's keyboard listeners are on `window` rather than the canvas: the
-canvas it draws into is `hidden` and still plays. Two things to know:
+canvas it draws into is `hidden` and still plays. Three things to know:
+
+- **readthedocs serves every version under a path prefix, so `base` is not a constant.**
+  `/en/latest/` for the default version, `/en/<pr-number>/` for a PR preview, `/en/<tag>/`
+  for a tag. `astro.config.mjs` derives both `site` and `base` from
+  **`READTHEDOCS_CANONICAL_URL`**, which readthedocs sets during the build; without it —
+  `just build-docs`, `just serve-docs`, CI — the site stays at the root, which is what the
+  local preview wants.
+
+  Astro and Starlight base-correct their own output (assets, routes, and sidebar entries,
+  including raw `link:` ones — leave those root-absolute). **Links written by hand are
+  not**, so write them **relative** (`../examples/rom-player/`): a root-absolute
+  `/examples/rom-player/` lands on the server root and 404s. `import.meta.env.BASE_URL`
+  is the alternative but mirrors `base` and carries **no** trailing slash, so
+  `${BASE_URL}examples/` silently produces `/en/latestexamples/`. A rehype plugin could
+  fix such links centrally, but Astro 7's default Markdown processor only runs rehype
+  plugins if `@astrojs/markdown-remark` is added back, swapping the whole pipeline to
+  unified for the sake of six links.
+
+  All of this fails **silently**: the build passes, readthedocs deploys, and the page
+  arrives unstyled with dead links. Nothing in CI catches it, since CI builds without the
+  env var. The check is to build with it set and look for root-absolute paths:
+
+  ```
+  cd docs && READTHEDOCS_CANONICAL_URL="https://game-koi.readthedocs.io/en/latest/" npm run build
+  ```
 
 - **The site consumes `game-koi` from the npm registry, not from `crates/game-koi-web/js/`.**
   That makes the ROM-player page an integration test of the *published* package, the same

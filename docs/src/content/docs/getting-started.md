@@ -25,7 +25,7 @@ button.addEventListener("click", async () => {
 ```
 
 See it running against a ROM you supply yourself in [Examples: ROM
-player](/examples/rom-player/).
+player](../examples/rom-player/).
 
 ## Full API
 

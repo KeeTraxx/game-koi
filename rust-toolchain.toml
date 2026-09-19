@@ -11,7 +11,7 @@
 # The trade is that new lints no longer arrive on their own. Bump this on purpose now and
 # then; the fixes are usually one line and worth reading.
 [toolchain]
-channel = "1.98.0"
+channel = "1.98.1"
 components = ["clippy", "rustfmt"]
 # Declared here so the browser build works from a fresh clone without a separate
 # `rustup target add` — the core is required to keep compiling for wasm32.

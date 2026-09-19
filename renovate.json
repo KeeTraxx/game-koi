@@ -68,6 +68,24 @@
     },
     {
       "description": [
+        "The docs site is held on the TypeScript 6 line by Astro's tooling, not by us:",
+        "@astrojs/check peer-requires typescript ^5.0.0 || ^6.0.0 and @astrojs/svelte",
+        "^5.3.3 || ^6.0.0. A v7 PR therefore cannot get a working lockfile — Renovate",
+        "bumped package.json to ^7.0.0 and left package-lock.json resolving 6.0.3, and",
+        "`npm ci` refuses outright on that mismatch, so both the docs job and the",
+        "readthedocs preview fail (PR #4). Majors only: 6.x patches and minors still",
+        "come through, and the npm package's own typescript is untouched, since it runs",
+        "tsc on its own with no Astro peers to satisfy.",
+        "Drop this rule once @astrojs/check and @astrojs/svelte accept 7."
+      ],
+      "matchManagers": ["npm"],
+      "matchFileNames": ["docs/package.json"],
+      "matchPackageNames": ["typescript"],
+      "matchUpdateTypes": ["major"],
+      "enabled": false
+    },
+    {
+      "description": [
         "egui, its two integration crates and pixels are one version set, not four",
         "dependencies. The stats overlay borrows the wgpu Device and Queue that pixels",
         "owns instead of creating its own, so both sides must compile against the same",

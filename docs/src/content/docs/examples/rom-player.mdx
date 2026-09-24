@@ -3,7 +3,9 @@ title: ROM player
 description: A live embed of the published game-koi npm package.
 ---
 
+import { Code } from '@astrojs/starlight/components';
 import RomPlayer from '../../../components/RomPlayer.svelte';
+import romPlayerSource from '../../../components/RomPlayer.svelte?raw';
 
 This is the actual `game-koi` npm package — the same one from
 [Getting started](../../getting-started/) — installed from the public registry and running
@@ -18,3 +20,10 @@ own machine below.
 Nothing is uploaded — the file is read directly into the emulator running in this tab.
 Audio starts only after your click, since browsers refuse to start an `AudioContext`
 without a user gesture.
+
+## The code
+
+The component above, in full. `GameKoi.create` takes a canvas and the ROM's bytes; calling
+it again would build a second emulator, so later files go through `loadRom` instead.
+
+<Code code={romPlayerSource} lang="svelte" title="RomPlayer.svelte" />

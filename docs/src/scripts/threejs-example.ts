@@ -20,11 +20,16 @@ gbCtx.fillRect(0, 0, gbCanvas.width, gbCanvas.height);
 
 // The whole trick: a texture backed by the canvas the emulator draws into.
 const screenTexture = new THREE.CanvasTexture(gbCanvas);
-// Nearest, and no mipmaps, or a 160x144 image stretched over a quad turns to mush —
-// the same reason the plain canvas demos set `image-rendering: pixelated`.
-screenTexture.magFilter = THREE.NearestFilter;
-screenTexture.minFilter = THREE.NearestFilter;
-screenTexture.generateMipmaps = false;
+// Linear filtering plus mipmaps, which on their own would blur the pixels into mush —
+// the screen material's shader below is what keeps them sharp. Plain NearestFilter
+// looks crisp in a still, but the screen usually covers fewer device pixels than its
+// 160 texels, so nearest sampling picks one texel per pixel more or less at random,
+// and as the model rocks that pick changes every frame: the image shimmers and crawls.
+// The renderer's `antialias` cannot help — MSAA smooths triangle edges, never texture
+// sampling. Regenerating the mip chain every frame is cheap at this size.
+screenTexture.magFilter = THREE.LinearFilter;
+screenTexture.minFilter = THREE.LinearMipmapLinearFilter;
+screenTexture.generateMipmaps = true;
 screenTexture.colorSpace = THREE.SRGBColorSpace;
 // glTF puts the UV origin top-left, so Blender's exporter flips V and GLTFLoader sets
 // flipY = false on every texture it loads. This one does not come from the loader and
@@ -39,16 +44,62 @@ camera.position.set(0, 0.6, 4.2);
 
 const renderer = new THREE.WebGLRenderer({ canvas: sceneCanvas, antialias: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+// Sharper sampling when the screen is seen at an angle, as it is for most of the rock.
+screenTexture.anisotropy = renderer.capabilities.getMaxAnisotropy();
 
 scene.add(new THREE.AmbientLight(0xffffff, 1.2));
 const key = new THREE.DirectionalLight(0xffffff, 2);
 key.position.set(2, 3, 4);
 scene.add(key);
 
-// MeshBasicMaterial ignores lights, which is what keeps the emulator's own colours
-// intact instead of letting the key light tint them; toneMapped: false does the same
-// for the renderer's output transform.
-const screen = new THREE.MeshBasicMaterial({ map: screenTexture, toneMapped: false });
+// "Sharp bilinear" sampling: pixel art that stays crisp up close and antialiased
+// everywhere. Inside a texel the lookup snaps to the texel centre, so it reads as one
+// solid colour, exactly like NearestFilter; only across a texel boundary does it blend,
+// and only over the width of one screen pixel (`fwidth` is how many texels one screen
+// pixel spans). When the screen is small that width exceeds a texel, the snapping
+// vanishes, and it degrades into ordinary linear + mipmap filtering, which is the right
+// answer there. `textureGrad` hands the hardware the *unsnapped* UV derivatives, since
+// the snapped coordinate is flat inside a texel and would fool it into choosing mip 0.
+//
+// Like MeshBasicMaterial it ignores lights, which keeps the emulator's own colours
+// intact instead of letting the key light tint them.
+const screen = new THREE.ShaderMaterial({
+	uniforms: {
+		map: { value: screenTexture },
+		texSize: { value: new THREE.Vector2(gbCanvas.width, gbCanvas.height) },
+	},
+	vertexShader: /* glsl */ `
+		varying vec2 vUv;
+		void main() {
+			vUv = uv;
+			gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+		}
+	`,
+	fragmentShader: /* glsl */ `
+		uniform sampler2D map;
+		uniform vec2 texSize;
+		varying vec2 vUv;
+		void main() {
+			vec2 texel = vUv * texSize;
+			vec2 seam = floor(texel + 0.5);
+			vec2 pixelInTexels = max(fwidth(texel), vec2(1e-5));
+			texel = seam + clamp((texel - seam) / pixelInTexels, -0.5, 0.5);
+			gl_FragColor = textureGrad(map, texel / texSize, dFdx(vUv), dFdy(vUv));
+			// The texture is sRGB, so the sample above came back linear; convert to the
+			// renderer's output space, which MeshBasicMaterial used to do for us.
+			#include <colorspace_fragment>
+		}
+	`,
+});
+
+// The model hangs off a pivot that rocks it left and right, rather than being spun
+// or having the camera orbit it: a full turn would spend half its time showing the
+// back, which has no screen. Rocking the model instead of the camera also leaves
+// OrbitControls entirely to the user, so the two never fight over the camera.
+const pivot = new THREE.Group();
+scene.add(pivot);
+const ROCK_AMPLITUDE = THREE.MathUtils.degToRad(25);
+const ROCK_PERIOD_SECONDS = 8;
 
 new GLTFLoader().load(
 	modelUrl,
@@ -75,7 +126,7 @@ new GLTFLoader().load(
 		box.setFromObject(model);
 		model.position.sub(box.getCenter(new THREE.Vector3()));
 
-		scene.add(model);
+		pivot.add(model);
 	},
 	undefined,
 	(err) => {
@@ -85,8 +136,6 @@ new GLTFLoader().load(
 
 const controls = new OrbitControls(camera, sceneCanvas);
 controls.enableDamping = true;
-controls.autoRotate = true;
-controls.autoRotateSpeed = 1.2;
 controls.minDistance = 2.5;
 controls.maxDistance = 8;
 
@@ -105,6 +154,8 @@ renderer.setAnimationLoop(() => {
 	// own schedule, so there is no callback to hook — re-upload every frame and let
 	// the two clocks stay independent. It is a 160x144 texture; the cost is noise.
 	screenTexture.needsUpdate = true;
+	const t = performance.now() / 1000;
+	pivot.rotation.y = ROCK_AMPLITUDE * Math.sin((2 * Math.PI * t) / ROCK_PERIOD_SECONDS);
 	controls.update();
 	renderer.render(scene, camera);
 });

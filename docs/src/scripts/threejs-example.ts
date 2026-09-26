@@ -1,6 +1,11 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { GameKoi } from 'game-koi';
+// `?url` has Vite copy the model into the build and hand back its final URL, base path
+// included — so it resolves under readthedocs' /en/<version>/ prefix, where a
+// hand-written '/models/gb_model.glb' would point at the server root and 404.
+import modelUrl from '../assets/gb_model.glb?url';
 
 const sceneCanvas = document.getElementById('scene') as HTMLCanvasElement;
 const gbCanvas = document.getElementById('gb') as HTMLCanvasElement;
@@ -21,6 +26,10 @@ screenTexture.magFilter = THREE.NearestFilter;
 screenTexture.minFilter = THREE.NearestFilter;
 screenTexture.generateMipmaps = false;
 screenTexture.colorSpace = THREE.SRGBColorSpace;
+// glTF puts the UV origin top-left, so Blender's exporter flips V and GLTFLoader sets
+// flipY = false on every texture it loads. This one does not come from the loader and
+// would keep three's default of true — and the game would play upside down.
+screenTexture.flipY = false;
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x14181c);
@@ -36,17 +45,43 @@ const key = new THREE.DirectionalLight(0xffffff, 2);
 key.position.set(2, 3, 4);
 scene.add(key);
 
-const shell = new THREE.MeshStandardMaterial({ color: 0x8b8f93, roughness: 0.75 });
-// BoxGeometry's material slots run +X, -X, +Y, -Y, +Z, -Z — so index 4 is the face
-// pointing at the camera. MeshBasicMaterial ignores lights, which is what keeps the
-// emulator's own colours intact instead of letting the key light tint them.
-const screen = new THREE.MeshBasicMaterial({ map: screenTexture });
-// 2.0 x 1.8 is the DMG's 10:9, so the picture lands on the face undistorted.
-const body = new THREE.Mesh(
-	new THREE.BoxGeometry(2.0, 1.8, 0.25),
-	[shell, shell, shell, shell, screen, shell],
+// MeshBasicMaterial ignores lights, which is what keeps the emulator's own colours
+// intact instead of letting the key light tint them; toneMapped: false does the same
+// for the renderer's output transform.
+const screen = new THREE.MeshBasicMaterial({ map: screenTexture, toneMapped: false });
+
+new GLTFLoader().load(
+	modelUrl,
+	(gltf) => {
+		const model = gltf.scene;
+		// The rest of the model keeps the materials it was given in Blender; only the
+		// "Display" quad is swapped for the live screen. Its UVs span 0..1 over the one
+		// face, so the whole 160x144 frame lands on it with no further mapping.
+		const display = model.getObjectByName('Display');
+		if (!(display instanceof THREE.Mesh)) throw new Error('model has no "Display" mesh');
+		display.material = screen;
+
+		// Modelled lying on its back, screen facing Blender's +Z — which the exporter's
+		// Z-up to Y-up conversion turns into three's +Y. A quarter turn about X stands it
+		// up facing the camera, with the cartridge slot on top.
+		model.rotation.x = Math.PI / 2;
+
+		// Blender works in metres and this is life-size (14.8 cm tall), while the camera
+		// and orbit limits below are set up for a body about two units tall. Scale to
+		// fit and centre on the origin, which is what OrbitControls circles.
+		const box = new THREE.Box3().setFromObject(model);
+		const size = box.getSize(new THREE.Vector3());
+		model.scale.setScalar(2.2 / size.y);
+		box.setFromObject(model);
+		model.position.sub(box.getCenter(new THREE.Vector3()));
+
+		scene.add(model);
+	},
+	undefined,
+	(err) => {
+		statusEl.textContent = `error loading model: ${err}`;
+	},
 );
-scene.add(body);
 
 const controls = new OrbitControls(camera, sceneCanvas);
 controls.enableDamping = true;

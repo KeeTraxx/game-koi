@@ -86,6 +86,14 @@ build-docs:
 serve-docs: build-docs
     npm run preview
 
+# Re-export the Game Boy model the Three.js example loads, after editing the .blend.
+#
+# The .glb is committed, not built: readthedocs and CI have no Blender, so this is the
+# one docs asset that only regenerates on a machine that does. Run it and commit the
+# result alongside the .blend change.
+export-model:
+    blender -b gb-model/gb_model.blend --python gb-model/export.py -- docs/src/assets/gb_model.glb
+
 # Point the docs site at the current release of the game-koi npm package.
 #
 # Renovate normally does this on its own (see renovate.json — it is the dependency that

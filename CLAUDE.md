@@ -133,7 +133,9 @@ relocation, not a redesign:
   `setItem` succeeds, so a `QuotaExceededError` leaves the save pending instead of
   dropped; and the page-exit flush is on `pagehide` + `visibilitychange`, not
   `beforeunload` (which mobile skips), which is only safe because `localStorage` is
-  synchronous — an IndexedDB store could be cut off mid-write there.
+  synchronous — an IndexedDB store could be cut off mid-write there. *When* a store
+  happens is shared with the desktop: see "When a save is written" in "When a save
+  is written" below.
 
   **`wasm-bindgen` the CLI and `wasm-bindgen` the crate must be the same version.**
   Pinned to 0.2.128 in both `Cargo.toml` and `build.sh`, which checks and refuses rather
@@ -197,7 +199,8 @@ subsystems. Verify against the actual tree before assuming anything here is stil
   a battery-less board is volatile on hardware too, so persisting it would invent a memory the cartridge
   never had. Files go in `dirs::data_dir()/game-koi/<rom-stem>.sav` (data, not config — a save is
   generated state), are written through a temporary plus a rename so a crash cannot truncate one, and are
-  autosaved every 120 frames when the RAM is dirty as well as on exit. Only the play path saves; `--test`
+  written when the game **commits** a save as well as on exit, with a 30-second fallback
+  (see "When a save is written" below). Only the play path saves; `--test`
   and friends must not, since Blargg's ROMs write their results into SRAM. **MBC3's RTC is not persisted.**
 - `src/joypad.rs` — P1. All the active-low inversion lives here; the public API is plain
   `press`/`release`. Selecting a button group means writing its select bit **low**.
@@ -477,6 +480,25 @@ nothing else host-specific — no ALSA/libudev, since it never touches `game-koi
 **The ALSA and libudev requirements above are `game-koi-desktop`'s, not the core's.**
 `cargo build -p game-koi-core` needs neither, which is what lets the wasm build work on a
 machine with no sound stack at all.
+
+## When a save is written
+
+Both frontends use one rule, driven by `Ram::is_committed` in the core: **the game
+wrote to save RAM and then shut the RAM gate.** That is the nearest thing the hardware
+has to a "saved" event — games are meant to open the gate, write, and shut it at once,
+so a brown-out cannot scribble on the save — and it is set in `Ram::set_enabled`, which
+every mapper's gate goes through. A committed save is written within a second
+(`MIN_SAVE_GAP_FRAMES`, 60, so a game shutting the gate around every access cannot
+write every frame; the flag stays set, so a commit is delayed, never lost).
+
+The dirty flag alone is **not** a usable trigger, and a 2-second timer on it was the
+first design. Measured on Super Mario Land 2: it opens the gate at boot, never shuts it
+(open at the end of 3599 of 3600 frames), and uses the RAM as working memory, changing
+19 to ~5000 of its 8 KiB bytes in every 2-second window from the title screen on. On
+hardware the battery keeps all of it powered, so there is no save moment to find. Such
+games get the fallback, `AUTOSAVE_FRAMES` = 1800 (~30 s) whenever dirty, plus every
+exit path; a crash can lose up to 30 s for them. `NoMbc` has no gate and is in the same
+position.
 
 ## Hardware reference
 

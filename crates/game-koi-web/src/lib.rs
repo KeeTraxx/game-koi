@@ -109,15 +109,25 @@ impl Emulator {
     }
 
     /// Whether the game has written to save RAM since the last [`Emulator::mark_saved`].
-    ///
-    /// The page polls this rather than writing storage every frame: a game only
-    /// touches save RAM when it saves, so almost every check is a cheap `false`.
     pub fn save_dirty(&mut self) -> bool {
         self.has_save()
             && self
                 .bus
                 .cartridge_ram_mut()
                 .is_some_and(|ram| ram.is_dirty())
+    }
+
+    /// Whether the game has finished a save — written to RAM, then shut its gate.
+    ///
+    /// The page's cue to store *now* rather than on its fallback timer. Not every game
+    /// shuts the gate (see `Ram::is_committed` in the core), so the timer still has to
+    /// exist; this just makes well-behaved games save promptly.
+    pub fn save_committed(&mut self) -> bool {
+        self.has_save()
+            && self
+                .bus
+                .cartridge_ram_mut()
+                .is_some_and(|ram| ram.is_committed())
     }
 
     /// A copy of the save RAM, or `undefined` if the cartridge has nothing to save.

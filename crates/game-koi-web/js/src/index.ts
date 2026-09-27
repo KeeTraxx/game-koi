@@ -68,11 +68,27 @@ export interface GameKoiOptions {
 }
 
 /**
- * How often the loop checks for unsaved RAM, in emulated frames — about two seconds,
- * the desktop's interval. Most checks find nothing: a game only writes save RAM when
- * it saves.
+ * The fallback autosave interval, in emulated frames — about thirty seconds, the
+ * desktop's too.
+ *
+ * Most saves are stored the moment the game finishes one: it shuts its RAM gate after
+ * writing, which `save_committed` reports. This timer is for games that never shut it —
+ * Super Mario Land 2 opens it at boot and uses the RAM as working memory, so it is
+ * dirty nearly every frame — and bounds what a crash can lose for them. Leaving the
+ * page, `pause`, `loadRom` and `dispose` all store as well, so a normal exit loses
+ * nothing either way.
  */
-const AUTOSAVE_FRAMES = 120;
+const AUTOSAVE_FRAMES = 1800;
+
+/**
+ * The shortest gap between two stores, in emulated frames — about a second. Guards
+ * against a game that shuts its gate around every access, which would otherwise store
+ * every frame. A commit that arrives sooner waits for this rather than being dropped.
+ */
+const MIN_SAVE_GAP_FRAMES = 60;
+
+/** What prompted a store, for the console line. */
+type SaveReason = "game saved" | "periodic" | "paused" | "page hidden" | "ROM changed" | "disposed";
 
 const DEFAULT_KEYMAP: Record<string, Button> = {
   ArrowRight: "right",
@@ -130,7 +146,8 @@ export class GameKoi {
   private readonly saves: LocalStorageSaves | null;
   /** The current ROM's storage key. */
   private saveKey = "";
-  private framesSinceAutosave = 0;
+  /** Emulated frames since the save was last stored or checked. */
+  private framesSinceSave = 0;
   private flushListener?: () => void;
 
   private constructor(
@@ -235,7 +252,7 @@ export class GameKoi {
     this.releaseAll();
     // Before the old machine is freed, or whatever it saved since the last autosave
     // goes with it.
-    this.flushSave();
+    this.flushSave("ROM changed");
     this.emulator.free();
     this.emulator = new Emulator(rom, this.audioContext.sampleRate);
     this.restoreSave(rom);
@@ -363,7 +380,7 @@ export class GameKoi {
   }
 
   pause(): void {
-    this.flushSave();
+    this.flushSave("paused");
     this.running = false;
     cancelAnimationFrame(this.rafHandle);
     // A direction held at the moment of the pause has no poll coming to release it,
@@ -383,7 +400,7 @@ export class GameKoi {
   dispose(): void {
     this.running = false;
     cancelAnimationFrame(this.rafHandle);
-    this.flushSave();
+    this.flushSave("disposed");
     this.detachSaveFlush();
     this.detachKeyboard();
     if (this.overlayListener) removeEventListener("keydown", this.overlayListener);
@@ -425,10 +442,10 @@ export class GameKoi {
       frames++;
     }
 
-    this.framesSinceAutosave += frames;
-    if (this.framesSinceAutosave >= AUTOSAVE_FRAMES) {
-      this.framesSinceAutosave = 0;
-      this.flushSave();
+    this.framesSinceSave += frames;
+    if (this.saves && this.framesSinceSave >= MIN_SAVE_GAP_FRAMES) {
+      if (this.emulator.save_committed()) this.flushSave("game saved");
+      else if (this.framesSinceSave >= AUTOSAVE_FRAMES) this.flushSave("periodic");
     }
 
     const drawStart = performance.now();
@@ -512,7 +529,7 @@ export class GameKoi {
 
   /** Loads the stored save for `rom` into the machine just built for it. */
   private restoreSave(rom: Uint8Array): void {
-    this.framesSinceAutosave = 0;
+    this.framesSinceSave = 0;
     if (!this.saves) return;
     this.saveKey = saveKey(rom);
     if (!this.emulator.has_save()) return;
@@ -534,16 +551,19 @@ export class GameKoi {
    * blocked storage leaves the save pending for the next attempt rather than
    * silently dropped.
    */
-  private flushSave(): void {
+  private flushSave(reason: SaveReason): void {
+    this.framesSinceSave = 0;
     if (!this.saves || !this.emulator.save_dirty()) return;
     const data = this.emulator.save_data();
     if (!data) return;
     try {
       this.saves.store(this.saveKey, data);
       this.emulator.mark_saved();
-      // Only reached when the game wrote its save RAM, so this is one line per in-game
-      // save (give or take the ~2 s autosave batching), not one per autosave tick.
-      console.info(`game-koi: saved ${data.length} bytes to localStorage["${this.saveKey}"]`);
+      // Only reached when the game wrote its save RAM, so there is no line for a check
+      // that found nothing to do.
+      console.info(
+        `game-koi: saved ${data.length} bytes to localStorage["${this.saveKey}"] (${reason})`,
+      );
     } catch (error) {
       console.warn("game-koi: could not store save", error);
     }
@@ -560,7 +580,7 @@ export class GameKoi {
   private attachSaveFlush(): void {
     // Unconditional, since a flush with nothing dirty is a no-op: becoming *visible*
     // costs one check, and `pagehide` need not trust the visibility state to be set yet.
-    this.flushListener = () => this.flushSave();
+    this.flushListener = () => this.flushSave("page hidden");
     addEventListener("pagehide", this.flushListener);
     document.addEventListener("visibilitychange", this.flushListener);
   }

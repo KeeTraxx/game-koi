@@ -56,12 +56,21 @@ const FRAME_TIME: Duration = Duration::from_nanos(16_742_706);
 /// The same figure as a rate, for reporting speed as a percentage of real hardware.
 const TARGET_HZ: f64 = 59.727_5;
 
-/// How often to write the save file out, in frames — about two seconds.
+/// The fallback autosave interval, in frames — about thirty seconds.
 ///
-/// A save is written when the window closes, but nothing guarantees that happens: the
-/// process can be killed, or the machine can lose power. Checking periodically costs
-/// nothing when the game has not touched its RAM, which is almost always.
-const AUTOSAVE_FRAMES: u64 = 120;
+/// Most saves are written the moment the game finishes one (see `save_due`), and again
+/// when the window closes, but neither is guaranteed: some games never shut their RAM
+/// gate, and the process can be killed or the machine lose power. This bounds what
+/// such a game can lose. It is long because those same games tend to use their save
+/// RAM as working memory, so for them "dirty" is true nearly every frame.
+const AUTOSAVE_FRAMES: u64 = 1800;
+
+/// The shortest gap between two writes, in frames — about a second.
+///
+/// Guards against a game that opens and shuts its RAM gate around every access, which
+/// would otherwise commit, and so write a file, every frame. A commit that arrives
+/// sooner is not dropped: the flag stays set until this has passed.
+const MIN_SAVE_GAP_FRAMES: u64 = 60;
 
 /// The four DMG shades as RGBA, from lightest to darkest.
 ///
@@ -133,6 +142,7 @@ pub fn run(
         next_frame: Instant::now(),
         paused: false,
         frames: 0,
+        frames_since_save: 0,
         started: Instant::now(),
         stats: FrameStats::new(),
         vsync: true,
@@ -192,6 +202,8 @@ struct App {
     paused: bool,
     /// Frames drawn and when we started, for the `--fps` sanity check.
     frames: u64,
+    /// Frames since the save was last written or checked, for `save_due`.
+    frames_since_save: u64,
     started: Instant,
     /// Rolling performance counters, shown by the overlay.
     stats: FrameStats,
@@ -245,11 +257,25 @@ impl App {
         }
     }
 
+    /// Whether this frame should write the save: promptly once the game has finished
+    /// saving (shut its RAM gate after writing), otherwise on the slow fallback timer.
+    fn save_due(&mut self) -> bool {
+        if self.save.is_none() || self.frames_since_save < MIN_SAVE_GAP_FRAMES {
+            return false;
+        }
+        let committed = self
+            .bus
+            .cartridge_ram_mut()
+            .is_some_and(|ram| ram.is_committed());
+        committed || self.frames_since_save >= AUTOSAVE_FRAMES
+    }
+
     /// Writes the save file, reporting a failure rather than swallowing it.
     ///
     /// Losing a save silently is the worst possible outcome here: the player finds out
     /// hours later, and there is nothing left to recover.
     fn write_save(&mut self) {
+        self.frames_since_save = 0;
         let Some(save) = self.save.take() else {
             return;
         };
@@ -582,7 +608,8 @@ impl ApplicationHandler for App {
                 self.started = Instant::now();
             }
 
-            if self.frames.is_multiple_of(AUTOSAVE_FRAMES) {
+            self.frames_since_save += 1;
+            if self.save_due() {
                 self.write_save();
             }
 

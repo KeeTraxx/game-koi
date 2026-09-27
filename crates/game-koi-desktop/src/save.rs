@@ -139,8 +139,9 @@ impl SaveFile {
 
     /// Writes the save only if the game has touched RAM since the last write.
     ///
-    /// The autosave calls this every couple of seconds. Most of those calls do nothing,
-    /// because a game only writes save RAM when it saves.
+    /// The frontend calls this when the game finishes a save, on its fallback timer, and
+    /// on exit. The timer's calls often do nothing, because most games only write save
+    /// RAM when they save.
     pub fn store_if_dirty(&self, bus: &mut TestBus) -> io::Result<()> {
         let dirty = bus
             .cartridge_ram_mut()
@@ -251,5 +252,19 @@ mod tests {
         bus.write(0x0000, 0x0A); // open the RAM gate, as a game saving would
         bus.write(0xA000, 0x42);
         assert!(bus.cartridge_ram_mut().unwrap().is_dirty());
+    }
+
+    #[test]
+    fn shutting_the_gate_through_the_mapper_commits_the_save() {
+        // The whole path a game takes: open, write, shut — through the bus and MBC1's
+        // register decode, not by calling `Ram` directly.
+        let cart = cartridge(0x03, 0x02, "commit.gb");
+        let mut bus = TestBus::new(&cart).expect("MBC1 is supported");
+        bus.write(0x0000, 0x0A);
+        bus.write(0xA000, 0x42);
+        assert!(!bus.cartridge_ram_mut().unwrap().is_committed());
+
+        bus.write(0x0000, 0x00);
+        assert!(bus.cartridge_ram_mut().unwrap().is_committed());
     }
 }

@@ -171,6 +171,9 @@ pub struct Ram {
     /// a host-side concern — the hardware has no such bit — but it is what lets the
     /// autosave skip rewriting a file nothing has touched.
     dirty: bool,
+    /// Whether the gate has been shut since a write — the game saying "save finished".
+    /// See [`Ram::is_committed`].
+    committed: bool,
 }
 
 impl Ram {
@@ -179,10 +182,16 @@ impl Ram {
             bytes: vec![0; size],
             enabled: false,
             dirty: false,
+            committed: false,
         }
     }
 
     fn set_enabled(&mut self, enabled: bool) {
+        // Open-to-shut with unsaved writes behind it. A shut gate being written shut
+        // again, or a gate opened only to read, is not a save.
+        if self.enabled && !enabled && self.dirty {
+            self.committed = true;
+        }
         self.enabled = enabled;
     }
 
@@ -200,14 +209,30 @@ impl Ram {
         let len = self.bytes.len().min(data.len());
         self.bytes[..len].copy_from_slice(&data[..len]);
         self.dirty = false;
+        self.committed = false;
     }
 
     pub fn is_dirty(&self) -> bool {
         self.dirty
     }
 
+    /// Whether the game has finished a save: it wrote to RAM and then shut the gate.
+    ///
+    /// This is the closest thing the hardware has to a "saved" event. Games are meant to
+    /// open the gate, write, and shut it straight away, so that a console browning out
+    /// cannot scribble on the save — and the shut is what tells a host the bytes are
+    /// complete and worth writing out now, rather than on the next timer.
+    ///
+    /// It is not universal, which is why hosts still need a periodic fallback: some
+    /// games open the gate at boot and never shut it (Super Mario Land 2 does, and uses
+    /// the RAM as working memory besides), and a cartridge with no mapper has no gate.
+    pub fn is_committed(&self) -> bool {
+        self.committed
+    }
+
     pub fn mark_clean(&mut self) {
         self.dirty = false;
+        self.committed = false;
     }
 
     fn is_present(&self) -> bool {
@@ -330,6 +355,42 @@ mod tests {
         ram.set_enabled(true);
         ram.write(0, 0xA000, 0x42);
         assert_eq!(ram.read(0, 0xA000), 0x42);
+    }
+
+    #[test]
+    fn shutting_the_gate_after_a_write_commits() {
+        let mut ram = Ram::new(8 * 1024);
+        ram.set_enabled(true);
+        ram.write(0, 0xA000, 0x42);
+        assert!(ram.is_dirty() && !ram.is_committed(), "still mid-save");
+
+        ram.set_enabled(false);
+        assert!(ram.is_committed());
+
+        ram.mark_clean();
+        assert!(!ram.is_dirty() && !ram.is_committed());
+    }
+
+    #[test]
+    fn shutting_the_gate_without_a_write_does_not_commit() {
+        // Opened only to read, and a gate written shut while already shut: neither
+        // produced anything to save.
+        let mut ram = Ram::new(8 * 1024);
+        ram.set_enabled(false);
+        ram.set_enabled(true);
+        let _ = ram.read(0, 0xA000);
+        ram.set_enabled(false);
+        assert!(!ram.is_committed());
+    }
+
+    #[test]
+    fn loading_a_save_clears_a_pending_commit() {
+        let mut ram = Ram::new(8 * 1024);
+        ram.set_enabled(true);
+        ram.write(0, 0xA000, 0x42);
+        ram.set_enabled(false);
+        ram.load(&[0; 8 * 1024]);
+        assert!(!ram.is_committed());
     }
 
     #[test]

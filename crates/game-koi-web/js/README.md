@@ -81,11 +81,17 @@ Keys keep their own `keyup` while paused. `dispose()` drops every listener.
 
 Games that save — the ones whose cartridge has a battery — keep their saves in
 `localStorage` automatically, so a reload or a later visit picks up where the player
-left off. Nothing needs configuring. The save is written about every two seconds while
-the game has unsaved changes, and again on `pause()`, `loadRom()`, `dispose()`, and when
-the tab is hidden or closed. Each write, and each save restored when a ROM loads, is
-logged with `console.info`, so the browser console shows when a game saved and under
-which key.
+left off. Nothing needs configuring. A save is stored as soon as the game finishes
+writing one — games close their save RAM when they are done, and that is the cue — and
+again on `pause()`, `loadRom()`, `dispose()`, and when the tab is hidden or closed.
+Each store, and each save restored when a ROM loads, is logged with `console.info`,
+with what prompted it.
+
+Some games never close their save RAM: Super Mario Land 2, for one, keeps it open
+and uses it as working memory, so it changes nearly every frame. For those there is
+nothing to wait for, and the save is stored every 30 seconds instead (plus on
+leaving the page, as above) — so a browser crash can cost up to 30 seconds of
+progress, but closing the tab normally costs nothing.
 
 A few things worth knowing:
 

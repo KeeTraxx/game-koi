@@ -132,7 +132,13 @@ sync-docs-version:
     npm pkg set dependencies.game-koi="^$version"
     # The lockfile has to move with it: readthedocs builds with `npm ci`, which refuses
     # outright when the lock and package.json disagree rather than resolving anew.
-    npm install --package-lock-only --no-audit --no-fund
+    #
+    # A full install, not `--package-lock-only`: despite the name, that also rewrites
+    # node_modules/.package-lock.json (npm's record of what is installed) to the new
+    # version without installing it. npm trusts that record, so every later `npm
+    # install` — including build-docs' — reports "up to date" and the docs keep
+    # serving the old package. Seen with npm 11.17.
+    npm install --no-audit --no-fund
     echo
     echo "docs now ask for game-koi ^$version."
     echo "Commit docs/package.json and docs/package-lock.json."

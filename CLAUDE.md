@@ -318,6 +318,12 @@ canvas it draws into is `hidden` and still plays. Three things to know:
   `just build-docs`, `just serve-docs`, CI — the site stays at the root, which is what the
   local preview wants.
 
+  The site is **also published to GitHub Pages** by `.github/workflows/docs-pages.yml`
+  on every push to `main`. A project site lives under `/game-koi/`, the same problem in
+  a different place, so the workflow sets **`DOCS_CANONICAL_URL`** (from
+  `actions/configure-pages`), which `astro.config.mjs` prefers over the readthedocs
+  variable. It needs Settings → Pages → Source set to "GitHub Actions" once.
+
   Astro and Starlight base-correct their own output (assets, routes, and sidebar entries,
   including raw `link:` ones — leave those root-absolute). **Links written by hand are
   not**, so write them **relative** (`../examples/rom-player/`): a root-absolute

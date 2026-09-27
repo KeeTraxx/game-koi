@@ -13,8 +13,14 @@ import svelte from '@astrojs/svelte';
 // READTHEDOCS_CANONICAL_URL is set during a readthedocs build and carries both halves.
 // Without it — `just build-docs`, `just serve-docs`, the docs job in CI — the site is
 // served from the root, which is what the local preview wants.
+//
+// DOCS_CANONICAL_URL is the same thing for any other host, and wins when both are set.
+// The GitHub Pages workflow sets it from actions/configure-pages, since a project site
+// lives under /<repo>/ and has exactly the same prefix problem.
 const canonical = new URL(
-    process.env.READTHEDOCS_CANONICAL_URL ?? 'https://game-koi.readthedocs.io/',
+    process.env.DOCS_CANONICAL_URL ??
+        process.env.READTHEDOCS_CANONICAL_URL ??
+        'https://game-koi.readthedocs.io/',
 );
 // Astro takes the base without a trailing slash; undefined leaves it at the root.
 const base = canonical.pathname.replace(/\/+$/, '') || undefined;

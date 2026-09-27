@@ -4,6 +4,12 @@ description: A Game Boy (DMG) emulator written in Rust, compiled to WebAssembly.
 template: splash
 hero:
   tagline: A Game Boy (DMG) emulator, written in Rust, compiled to WebAssembly, wrapped in a small TypeScript API.
+  # A 4x nearest-neighbour copy, padded square: the hero shows it at a few hundred
+  # pixels in a square box (Astro crops anything else to fit), and a browser enlarging
+  # the 160x144 original would smooth the pixel art into a blur.
+  image:
+    file: ../../assets/koi-4x.png
+    alt: A pixel-art koi in the Game Boy's four shades of green.
   actions:
     - text: Get started
       link: examples/vanilla-js/

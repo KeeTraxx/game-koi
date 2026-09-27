@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/src/assets/koi-4x.png" width="320" alt="A pixel-art koi in the Game Boy's four shades of green">
+</p>
+
 # game-koi
 
 [![CI](https://github.com/KeeTraxx/game-koi/actions/workflows/ci.yml/badge.svg)](https://github.com/KeeTraxx/game-koi/actions/workflows/ci.yml)

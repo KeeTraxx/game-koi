@@ -51,6 +51,10 @@ export default defineConfig({
     base,
     integrations: [starlight({
         title: 'game-koi',
+        // Pixel art in the DMG's four greens. The favicon is the same image padded to a
+        // square with its own background colour, so browsers do not stretch it.
+        logo: { src: './src/assets/koi.png' },
+        favicon: '/favicon.png',
         social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/KeeTraxx/game-koi' }],
         sidebar: [
             {

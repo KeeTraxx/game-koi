@@ -17,7 +17,7 @@
     "@astrojs/svelte": "^9.0.1",
     "@astrojs/vue": "^7.0.3",
     "astro": "^7.2.10",
-    "game-koi": "^0.6.0",
+    "game-koi": "^0.7.0",
     "preact": "^10.29.8",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",

@@ -77,6 +77,30 @@ Two cases release without anyone letting go: `loadRom()` releases everything (as
 the gamepad was holding (as `"gamepad"`), since polling stops and nothing else would.
 Keys keep their own `keyup` while paused. `dispose()` drops every listener.
 
+### Saves
+
+Games that save — the ones whose cartridge has a battery — keep their saves in
+`localStorage` automatically, so a reload or a later visit picks up where the player
+left off. Nothing needs configuring. The save is written about every two seconds while
+the game has unsaved changes, and again on `pause()`, `loadRom()`, `dispose()`, and when
+the tab is hidden or closed.
+
+A few things worth knowing:
+
+- **Only battery-backed cartridges are saved**, as on hardware: RAM on a board without
+  a battery is gone when the power is. Check with `koi.exportSave() !== null`.
+- Saves are keyed by the ROM's header title plus a CRC32 of the whole ROM, so two
+  ROMs sharing a title (a hack and its original, say) do not share a save.
+- `localStorage` is per origin and holds roughly 5 MiB. The largest Game Boy save is
+  128 KiB (about 171 KiB stored), so that is plenty for a handful of games but not an
+  unlimited library. A write that hits the quota is logged and retried later, not lost.
+- `koi.exportSave()` / `koi.importSave(bytes)` read and replace the raw save RAM — the
+  same `.sav` format the desktop build and most other emulators use — for download or
+  upload buttons. A game only re-reads its save at its own pace, usually on the title
+  screen, so call `loadRom()` after an import if you want it picked up at once.
+- Pass `saves: false` to `create()` to leave `localStorage` alone and handle saves
+  entirely through `exportSave`/`importSave` — for IndexedDB, or a server.
+
 ### Debug overlay
 
 Press <kbd>`</kbd> (backtick) to toggle a stats panel over the canvas, or call
@@ -114,7 +138,12 @@ element. Pass `overlayKey: null` to bind no key.
   - `targetBuffer?: number` — audio samples to keep queued ahead. Default `1600`.
   - `maxFramesPerWake?: number` — cap on frames emulated per wake-up, so a
     backgrounded tab can't return to a freeze. Default `4`.
+  - `saves?: boolean` — keep battery-backed saves in `localStorage`. Default `true`.
 - `koi.loadRom(rom)` — swaps in a new ROM, keeping the same canvas and audio setup.
+- `koi.exportSave()` — the cartridge's save RAM as a `Uint8Array`, or `null` if it
+  has no battery-backed RAM.
+- `koi.importSave(bytes)` — replaces the save RAM (and stores it, if saving is on).
+  Returns `false` if the cartridge has none or `bytes` is shorter than it.
 - `koi.press(button)` / `koi.release(button)` — `Button` is one of `"up"`, `"down"`,
   `"left"`, `"right"`, `"a"`, `"b"`, `"start"`, `"select"`.
 - `koi.on(type, listener)` / `koi.off(type, listener)` — `"press"` and `"release"`

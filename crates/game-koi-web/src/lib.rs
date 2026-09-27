@@ -13,6 +13,9 @@
 //! - Call [`Emulator::run_frame`] once per frame you want emulated.
 //! - Read [`Emulator::frame_ptr`] into a `Uint8ClampedArray` and blit it to a canvas.
 //! - Drain [`Emulator::take_samples`] into an `AudioWorklet`.
+//! - Persist [`Emulator::save_data`] when [`Emulator::save_dirty`] says so, and hand
+//!   it back through [`Emulator::load_save`] next time. Where it goes is the page's
+//!   choice; this side has no storage, as the desktop's has no `localStorage`.
 //!
 //! Pacing is not done here, and that is the important difference from the desktop
 //! build. `game-koi-desktop` sleeps until the next 16.74 ms deadline, which a browser
@@ -48,6 +51,9 @@ pub struct Emulator {
     samples: Vec<(f32, f32)>,
     /// Interleaved left/right, handed to the audio side as one flat array.
     interleaved: Vec<f32>,
+    /// Whether the header says the board has a battery. Only then does the cartridge
+    /// RAM survive a power-off on hardware, so only then is it offered to the page.
+    battery: bool,
 }
 
 #[wasm_bindgen]
@@ -73,7 +79,72 @@ impl Emulator {
             rgba: vec![0; SCREEN_WIDTH * SCREEN_HEIGHT * 4],
             samples: Vec::new(),
             interleaved: Vec::new(),
+            battery: cart.header().cartridge_type.has_battery,
         })
+    }
+
+    /// Whether this cartridge has save RAM worth keeping.
+    ///
+    /// Same rule as the desktop's `save.rs`: a battery on the board *and* RAM to keep
+    /// powered. RAM on a battery-less board is volatile on hardware too, so persisting
+    /// it would invent a memory the cartridge never had. The mapper is asked rather
+    /// than the header because MBC2's RAM is inside the mapper chip and its header
+    /// declares none.
+    pub fn has_save(&mut self) -> bool {
+        self.battery
+            && self
+                .bus
+                .cartridge_ram_mut()
+                .is_some_and(|ram| !ram.bytes().is_empty())
+    }
+
+    /// Whether the game has written to save RAM since the last [`Emulator::mark_saved`].
+    ///
+    /// The page polls this rather than writing storage every frame: a game only
+    /// touches save RAM when it saves, so almost every check is a cheap `false`.
+    pub fn save_dirty(&mut self) -> bool {
+        self.has_save()
+            && self
+                .bus
+                .cartridge_ram_mut()
+                .is_some_and(|ram| ram.is_dirty())
+    }
+
+    /// A copy of the save RAM, or `undefined` if the cartridge has nothing to save.
+    ///
+    /// Deliberately does not clear the dirty flag: if the page's write fails (storage
+    /// full, private browsing), the save must still count as unwritten. The page calls
+    /// [`Emulator::mark_saved`] once the bytes are actually stored.
+    pub fn save_data(&mut self) -> Option<Vec<u8>> {
+        if !self.has_save() {
+            return None;
+        }
+        self.bus.cartridge_ram_mut().map(|ram| ram.bytes().to_vec())
+    }
+
+    pub fn mark_saved(&mut self) {
+        if let Some(ram) = self.bus.cartridge_ram_mut() {
+            ram.mark_clean();
+        }
+    }
+
+    /// Restores save RAM from stored bytes. Returns whether it was applied.
+    ///
+    /// A save shorter than the chip is refused, as on the desktop: it is more likely a
+    /// different game's than a truncated copy of this one's, and half-loading it would
+    /// corrupt what the player has. A longer one is accepted, since some emulators
+    /// append RTC state after the RAM.
+    pub fn load_save(&mut self, data: &[u8]) -> bool {
+        if !self.has_save() {
+            return false;
+        }
+        match self.bus.cartridge_ram_mut() {
+            Some(ram) if data.len() >= ram.bytes().len() => {
+                ram.load(data);
+                true
+            }
+            _ => false,
+        }
     }
 
     /// Runs until the PPU finishes a frame.

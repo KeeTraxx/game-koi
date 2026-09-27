@@ -68,7 +68,7 @@ relocation, not a redesign:
   Gamepad API reports **+Y as down** (gilrs reports +Y as up), and pads whose `mapping`
   is not `"standard"` are skipped entirely, since an unrecognised layout's indices are
   whatever the driver enumerated. `gamepad.ts` is pure — snapshots in, edges out — which
-  is what makes it testable; the tested modules are exactly the pure ones (`gamepad.ts`,
+  is what makes it testable; the tested modules are exactly the pure ones (`gamepad.ts`, `saves.ts`,
   `stats.ts`, `events.ts`), in `js/test/*.test.js`, plain JS against the compiled `dist/`
   so there is no test-only toolchain and nothing test-shaped in the published package.
   `npm test` (or `just test-web`) builds and runs them; CI runs them before publishing.
@@ -123,6 +123,17 @@ relocation, not a redesign:
   up. When the two clocks disagree, audio wins, because a dry buffer is audible and a
   repeated frame is not. `maxFramesPerWake` caps the catch-up so a backgrounded tab
   (where `rAF` stops firing) does not return to a freeze.
+
+  **Battery saves go to `localStorage`** (`js/src/saves.ts`), the browser's
+  counterpart of the desktop's `save.rs`. The *what* stays in Rust — `Emulator::has_save`
+  applies the same battery-and-RAM rule, asking the mapper so MBC2 counts — and the page
+  only decides where bytes go. Three choices worth keeping: the key is the header title
+  plus a **CRC32 of the ROM**, because a page gets bytes, not a filename, and titles
+  collide; `save_data` does **not** clear the dirty flag, `mark_saved` does, only after
+  `setItem` succeeds, so a `QuotaExceededError` leaves the save pending instead of
+  dropped; and the page-exit flush is on `pagehide` + `visibilitychange`, not
+  `beforeunload` (which mobile skips), which is only safe because `localStorage` is
+  synchronous — an IndexedDB store could be cut off mid-write there.
 
   **`wasm-bindgen` the CLI and `wasm-bindgen` the crate must be the same version.**
   Pinned to 0.2.128 in both `Cargo.toml` and `build.sh`, which checks and refuses rather

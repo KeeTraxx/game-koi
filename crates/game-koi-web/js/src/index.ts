@@ -14,6 +14,7 @@ import { DEFAULT_GAMEPAD_MAP, GamepadInput, type Action } from "./gamepad.js";
 import { Emitter, type ButtonSource, type GameKoiEvents } from "./events.js";
 import { FrameStats } from "./stats.js";
 import { StatsOverlay } from "./overlay.js";
+import { LocalStorageSaves, defaultStorage, saveKey } from "./saves.js";
 
 export type {
   ButtonEvent,
@@ -57,7 +58,21 @@ export interface GameKoiOptions {
    * freeze the page catching up. Default 4.
    */
   maxFramesPerWake?: number;
+  /**
+   * Keep battery-backed save RAM in `localStorage`, so a game's saves survive a
+   * reload. Default `true`. Cartridges without a battery are never saved, as on
+   * hardware. Pass `false` to manage saves yourself with {@link GameKoi.exportSave}
+   * and {@link GameKoi.importSave}.
+   */
+  saves?: boolean;
 }
+
+/**
+ * How often the loop checks for unsaved RAM, in emulated frames — about two seconds,
+ * the desktop's interval. Most checks find nothing: a game only writes save RAM when
+ * it saves.
+ */
+const AUTOSAVE_FRAMES = 120;
 
 const DEFAULT_KEYMAP: Record<string, Button> = {
   ArrowRight: "right",
@@ -105,6 +120,12 @@ export class GameKoi {
   private keydownListener?: (event: KeyboardEvent) => void;
   private keyupListener?: (event: KeyboardEvent) => void;
   private overlayListener?: (event: KeyboardEvent) => void;
+  /** Where saves go, or `null` if saving is off or storage is unavailable. */
+  private readonly saves: LocalStorageSaves | null;
+  /** The current ROM's storage key. */
+  private saveKey = "";
+  private framesSinceAutosave = 0;
+  private flushListener?: () => void;
 
   private constructor(
     emulator: Emulator,
@@ -117,6 +138,7 @@ export class GameKoi {
     overlayKey: string | null,
     targetBuffer: number,
     maxFramesPerWake: number,
+    saves: LocalStorageSaves | null,
   ) {
     this.emulator = emulator;
     this.wasmMemory = wasmMemory;
@@ -129,6 +151,7 @@ export class GameKoi {
     this.maxFramesPerWake = maxFramesPerWake;
     this.imageData = ctx.createImageData(Emulator.width(), Emulator.height());
     this.stats = new FrameStats(performance.now());
+    this.saves = saves;
 
     this.worklet.port.onmessage = (event) => {
       this.buffered = event.data.buffered;
@@ -137,6 +160,7 @@ export class GameKoi {
     };
     if (keymap) this.attachKeyboard();
     if (overlayKey !== null) this.attachOverlayKey(overlayKey);
+    if (saves) this.attachSaveFlush();
   }
 
   /**
@@ -173,6 +197,8 @@ export class GameKoi {
     const gamepadMap =
       options.gamepadMap === null ? null : options.gamepadMap ?? DEFAULT_GAMEPAD_MAP;
 
+    const storage = options.saves === false ? null : defaultStorage();
+
     const koi = new GameKoi(
       emulator,
       wasm.memory,
@@ -184,7 +210,9 @@ export class GameKoi {
       options.overlayKey === null ? null : options.overlayKey ?? "Backquote",
       options.targetBuffer ?? 1600,
       options.maxFramesPerWake ?? 4,
+      storage ? new LocalStorageSaves(storage) : null,
     );
+    koi.restoreSave(options.rom);
     koi.running = true;
     koi.loop();
     return koi;
@@ -199,8 +227,40 @@ export class GameKoi {
     // machine, and a display would show it stuck down).
     this.gamepad?.releaseAll();
     this.releaseAll();
+    // Before the old machine is freed, or whatever it saved since the last autosave
+    // goes with it.
+    this.flushSave();
     this.emulator.free();
     this.emulator = new Emulator(rom, this.audioContext.sampleRate);
+    this.restoreSave(rom);
+  }
+
+  /**
+   * The cartridge's save RAM, or `null` if it has no battery-backed RAM.
+   *
+   * The same raw bytes the desktop build writes to its `.sav` file, so either can be
+   * handed to the other — and to most other emulators, which use the same format.
+   */
+  exportSave(): Uint8Array | null {
+    return this.emulator.save_data() ?? null;
+  }
+
+  /**
+   * Replaces the cartridge's save RAM, and stores it if saving is on.
+   *
+   * Returns `false` if the cartridge has no battery-backed RAM or the data is shorter
+   * than its RAM (more likely another game's save than a truncated one of this game's).
+   * The running game will not notice until it next reads its save — for most games,
+   * that means going back to the title screen or calling {@link loadRom} again.
+   */
+  importSave(data: Uint8Array): boolean {
+    if (!this.emulator.load_save(data)) return false;
+    try {
+      this.saves?.store(this.saveKey, data);
+    } catch (error) {
+      console.warn("game-koi: could not store imported save", error);
+    }
+    return true;
   }
 
   press(button: Button): void {
@@ -292,6 +352,7 @@ export class GameKoi {
   }
 
   pause(): void {
+    this.flushSave();
     this.running = false;
     cancelAnimationFrame(this.rafHandle);
     // A direction held at the moment of the pause has no poll coming to release it,
@@ -311,6 +372,8 @@ export class GameKoi {
   dispose(): void {
     this.running = false;
     cancelAnimationFrame(this.rafHandle);
+    this.flushSave();
+    this.detachSaveFlush();
     this.detachKeyboard();
     if (this.overlayListener) removeEventListener("keydown", this.overlayListener);
     this.emitter.clear();
@@ -349,6 +412,12 @@ export class GameKoi {
         this.buffered += count;
       }
       frames++;
+    }
+
+    this.framesSinceAutosave += frames;
+    if (this.framesSinceAutosave >= AUTOSAVE_FRAMES) {
+      this.framesSinceAutosave = 0;
+      this.flushSave();
     }
 
     const drawStart = performance.now();
@@ -428,6 +497,59 @@ export class GameKoi {
     for (const action of actions ?? []) {
       this.setButton(action.button, action.type === "press", "gamepad");
     }
+  }
+
+  /** Loads the stored save for `rom` into the machine just built for it. */
+  private restoreSave(rom: Uint8Array): void {
+    this.framesSinceAutosave = 0;
+    if (!this.saves) return;
+    this.saveKey = saveKey(rom);
+    if (!this.emulator.has_save()) return;
+    const data = this.saves.load(this.saveKey);
+    if (data && !this.emulator.load_save(data)) {
+      console.warn(`game-koi: ignoring ${this.saveKey}, it is smaller than this cartridge's RAM`);
+    }
+  }
+
+  /**
+   * Writes the save if the game has touched its RAM since the last write.
+   *
+   * The dirty flag is cleared only after the write succeeds, so a full quota or
+   * blocked storage leaves the save pending for the next attempt rather than
+   * silently dropped.
+   */
+  private flushSave(): void {
+    if (!this.saves || !this.emulator.save_dirty()) return;
+    const data = this.emulator.save_data();
+    if (!data) return;
+    try {
+      this.saves.store(this.saveKey, data);
+      this.emulator.mark_saved();
+    } catch (error) {
+      console.warn("game-koi: could not store save", error);
+    }
+  }
+
+  /**
+   * Flushes when the page goes away.
+   *
+   * `pagehide` and a hidden `visibilitychange` rather than `beforeunload`, which
+   * mobile browsers skip when they kill a backgrounded tab. Hidden is the last moment
+   * a page is reliably given, and `localStorage` being synchronous is what makes
+   * writing in it safe — an async store could be cut off mid-write.
+   */
+  private attachSaveFlush(): void {
+    // Unconditional, since a flush with nothing dirty is a no-op: becoming *visible*
+    // costs one check, and `pagehide` need not trust the visibility state to be set yet.
+    this.flushListener = () => this.flushSave();
+    addEventListener("pagehide", this.flushListener);
+    document.addEventListener("visibilitychange", this.flushListener);
+  }
+
+  private detachSaveFlush(): void {
+    if (!this.flushListener) return;
+    removeEventListener("pagehide", this.flushListener);
+    document.removeEventListener("visibilitychange", this.flushListener);
   }
 
   private attachKeyboard(): void {

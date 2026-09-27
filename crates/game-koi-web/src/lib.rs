@@ -39,6 +39,16 @@ const PALETTE: [[u8; 4]; 4] = [
     [0x08, 0x18, 0x20, 0xFF],
 ];
 
+/// The workspace version this module was built from.
+///
+/// Read from Cargo at compile time rather than from `package.json`, so it names the
+/// binary actually loaded: a stale `.wasm` cached next to a newer JS wrapper reports
+/// its own, older, number instead of the wrapper's.
+#[wasm_bindgen]
+pub fn version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
 /// A running Game Boy, owned by JavaScript.
 #[wasm_bindgen]
 pub struct Emulator {

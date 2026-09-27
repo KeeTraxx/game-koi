@@ -83,7 +83,9 @@ Games that save — the ones whose cartridge has a battery — keep their saves 
 `localStorage` automatically, so a reload or a later visit picks up where the player
 left off. Nothing needs configuring. The save is written about every two seconds while
 the game has unsaved changes, and again on `pause()`, `loadRom()`, `dispose()`, and when
-the tab is hidden or closed.
+the tab is hidden or closed. Each write, and each save restored when a ROM loads, is
+logged with `console.info`, so the browser console shows when a game saved and under
+which key.
 
 A few things worth knowing:
 
@@ -150,6 +152,9 @@ element. Pass `overlayKey: null` to bind no key.
   button edges, from any input path. `on` returns a function that unsubscribes. The
   payload is `{ button, source: "keyboard" | "gamepad" | "api", pressed: Set<Button> }`.
 - `koi.pressed` — everything held right now, as a `Set<Button>` snapshot.
+- `koi.version` — the emulator's version, e.g. `"0.6.0"`. It is also logged once per
+  page (`console.info`) when the wasm module loads. It is read from the wasm binary
+  itself, so a stale cached `.wasm` shows up as a mismatch here.
 - `koi.toggleOverlay()` / `koi.overlayVisible` — the debug stats panel.
 - `koi.pause()` / `koi.resume()`.
 - `koi.dispose()` — stops the loop and tears down the audio graph. Call this before

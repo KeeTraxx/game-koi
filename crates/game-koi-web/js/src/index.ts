@@ -8,7 +8,7 @@
  * inlined as a Blob URL.
  */
 
-import init, { Emulator } from "../wasm/game_koi_web.js";
+import init, { Emulator, version as wasmVersion } from "../wasm/game_koi_web.js";
 import { WORKLET_SOURCE } from "./worklet.js";
 import { DEFAULT_GAMEPAD_MAP, GamepadInput, type Action } from "./gamepad.js";
 import { Emitter, type ButtonSource, type GameKoiEvents } from "./events.js";
@@ -86,10 +86,16 @@ const DEFAULT_KEYMAP: Record<string, Button> = {
 };
 
 // The wasm module only needs instantiating once per page, no matter how many
-// `GameKoi` instances are created.
+// `GameKoi` instances are created. The version line is logged here for the same
+// reason: once per page, not once per instance or per `loadRom`.
 let wasmReady: ReturnType<typeof init> | null = null;
 function ensureWasm() {
-  if (!wasmReady) wasmReady = init();
+  if (!wasmReady) {
+    wasmReady = init().then((wasm) => {
+      console.info(`game-koi ${wasmVersion()}`);
+      return wasm;
+    });
+  }
   return wasmReady;
 }
 
@@ -269,6 +275,11 @@ export class GameKoi {
 
   release(button: Button): void {
     this.setButton(button, false, "api");
+  }
+
+  /** The version of the emulator core running — the same number logged at startup. */
+  get version(): string {
+    return wasmVersion();
   }
 
   /** Everything the joypad has down right now — a snapshot, safe to keep. */
@@ -506,8 +517,13 @@ export class GameKoi {
     this.saveKey = saveKey(rom);
     if (!this.emulator.has_save()) return;
     const data = this.saves.load(this.saveKey);
-    if (data && !this.emulator.load_save(data)) {
-      console.warn(`game-koi: ignoring ${this.saveKey}, it is smaller than this cartridge's RAM`);
+    // No stored save is the normal first run, and not worth a line.
+    if (!data) return;
+    const where = `localStorage["${this.saveKey}"]`;
+    if (this.emulator.load_save(data)) {
+      console.info(`game-koi: restored ${data.length} bytes from ${where}`);
+    } else {
+      console.warn(`game-koi: ignoring ${where}, it is smaller than this cartridge's RAM`);
     }
   }
 
@@ -525,6 +541,9 @@ export class GameKoi {
     try {
       this.saves.store(this.saveKey, data);
       this.emulator.mark_saved();
+      // Only reached when the game wrote its save RAM, so this is one line per in-game
+      // save (give or take the ~2 s autosave batching), not one per autosave tick.
+      console.info(`game-koi: saved ${data.length} bytes to localStorage["${this.saveKey}"]`);
     } catch (error) {
       console.warn("game-koi: could not store save", error);
     }

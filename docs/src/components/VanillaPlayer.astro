@@ -1,0 +1,14 @@
+---
+import './rom-player.css';
+---
+
+<div class="rom-player">
+	<canvas id="screen" width="160" height="144"></canvas>
+	<p class="status" id="status">ready — choose a ROM (.gb)</p>
+	<input type="file" accept=".gb" id="rom" />
+</div>
+
+<script>
+	// Bundled and run in the browser only, like a <script type="module"> on any page.
+	import '../scripts/vanilla-example.ts';
+</script>

@@ -8,20 +8,20 @@ import source from '../../scripts/threejs-example.ts?raw';
 
 <StarlightPage
 	frontmatter={{
-		title: 'Three.js scene',
+		title: 'Three.js',
 		description: 'The emulator’s canvas, used as a live texture in a Three.js scene.',
 	}}
 >
 	<p>
-		The <a href="../rom-player/">ROM player</a> puts the emulator on a canvas you
-		look at directly. This page never shows that canvas: it hands it to Three.js as a
+		The other examples, starting with <a href="../vanilla-js/">VanillaJS</a>, put the
+		emulator on a canvas you look at directly. This page never shows that canvas: it hands it to Three.js as a
 		texture and maps it onto the screen of a model you can spin around. The emulator
 		does not know the difference — it draws 160&times;144 pixels into a canvas exactly
 		as before, and something else decides what those pixels become.
 	</p>
 
 	<p>
-		Same "bring your own ROM" deal as the other page, and the same keyboard controls
+		Same "bring your own ROM" deal as the other pages, and the same keyboard controls
 		(arrows, <kbd>Z</kbd>, <kbd>X</kbd>, <kbd>Enter</kbd>, right <kbd>Shift</kbd>) —
 		they are bound to the window, not the canvas, so a hidden canvas still plays.
 		Drag to orbit, scroll to zoom.

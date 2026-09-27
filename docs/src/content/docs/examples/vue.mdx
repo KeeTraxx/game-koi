@@ -1,0 +1,36 @@
+---
+title: Vue.js
+description: The game-koi npm package in a Vue 3 single-file component.
+---
+
+import { Code } from '@astrojs/starlight/components';
+import RomPlayer from '../../../components/vue/RomPlayer.vue';
+import RomNotice from '../../../components/RomNotice.astro';
+import source from '../../../components/vue/RomPlayer.vue?raw';
+
+The same player as the [VanillaJS example](../vanilla-js/), as a Vue 3 single-file
+component using `<script setup>`. It uses the `game-koi` package from the public npm
+registry.
+
+## Try it
+
+<RomPlayer client:only="vue" />
+
+<RomNotice />
+
+## The code
+
+Things specific to Vue:
+
+- **`useTemplateRef('canvas')`** (Vue 3.5+) gives the component the canvas element to
+  hand to `GameKoi.create`. On older versions, use `ref<HTMLCanvasElement | null>(null)`
+  with a variable of the same name.
+- **`koi` is a plain `let`, not a `ref()`.** The template never reads it, and a
+  reactive proxy around the emulator would add nothing.
+- **`game-koi` is imported inside the handler.** The package touches `AudioContext`
+  and wasm as soon as it is evaluated, so it must not load during a server-side render
+  (Nuxt, Astro). In Nuxt you can also wrap the component in `<ClientOnly>`.
+- **`onBeforeUnmount` calls `dispose()`**, which stops the frame loop, removes the
+  keyboard listeners and closes the audio context.
+
+<Code code={source} lang="vue" title="RomPlayer.vue" />

@@ -305,11 +305,14 @@ readthedocs.com is **not restricted to Sphinx/MkDocs**: `.readthedocs.yaml` uses
 whatever lands in `$READTHEDOCS_OUTPUT/html`. Astro was picked over Sphinx/MkDocs because
 the example pages embed *running* JavaScript rather than screenshots, and over
 Docusaurus/VitePress because those bind interactive components to React and Vue
-respectively — Astro's islands let a Svelte component and a bare Three.js script each
-hydrate on their own page of the same otherwise-static site. The Three.js page feeds the
+respectively — Astro's islands let components from several frameworks hydrate on their
+own pages of the same otherwise-static site. The site is **example-first**: one page per
+integration (VanillaJS, Svelte, React, Preact, Vue, Three.js), each running the published
+package and showing its own source via `?raw` imports, so the code shown is the code
+running. The Three.js page feeds the
 emulator's canvas to a `CanvasTexture` and maps it onto a model, which works precisely
 because the package's keyboard listeners are on `window` rather than the canvas: the
-canvas it draws into is `hidden` and still plays. Three things to know:
+canvas it draws into is `hidden` and still plays. Four things to know:
 
 - **readthedocs serves every version under a path prefix, so `base` is not a constant.**
   `/en/latest/` for the default version, `/en/<pr-number>/` for a PR preview, `/en/<tag>/`
@@ -326,13 +329,18 @@ canvas it draws into is `hidden` and still plays. Three things to know:
 
   Astro and Starlight base-correct their own output (assets, routes, and sidebar entries,
   including raw `link:` ones — leave those root-absolute). **Links written by hand are
-  not**, so write them **relative** (`../examples/rom-player/`): a root-absolute
-  `/examples/rom-player/` lands on the server root and 404s. `import.meta.env.BASE_URL`
+  not**, so write them **relative** (`../examples/svelte/`): a root-absolute
+  `/examples/svelte/` lands on the server root and 404s. `import.meta.env.BASE_URL`
   is the alternative but mirrors `base` and carries **no** trailing slash, so
   `${BASE_URL}examples/` silently produces `/en/latestexamples/`. A rehype plugin could
   fix such links centrally, but Astro 7's default Markdown processor only runs rehype
   plugins if `@astrojs/markdown-remark` is added back, swapping the whole pipeline to
-  unified for the sake of six links.
+  unified for the sake of a handful of links.
+
+  **Redirects are the same trap the other way round**: Astro base-corrects a redirect's
+  source but emits its destination as written, so the `redirects` in `astro.config.mjs`
+  (for the renamed `getting-started` and `examples/rom-player` pages) prepend `base` by
+  hand.
 
   All of this fails **silently**: the build passes, readthedocs deploys, and the page
   arrives unstyled with dead links. Nothing in CI catches it, since CI builds without the
@@ -343,7 +351,7 @@ canvas it draws into is `hidden` and still plays. Three things to know:
   ```
 
 - **The site consumes `game-koi` from the npm registry, not from `crates/game-koi-web/js/`.**
-  That makes the ROM-player page an integration test of the *published* package, the same
+  That makes every example page an integration test of the *published* package, the same
   way the crate-root demo tests the locally built one — but it also means emulator changes
   only reach the docs after a release.
 
@@ -376,11 +384,17 @@ canvas it draws into is `hidden` and still plays. Three things to know:
   automerge on, a warning nobody reads is a warning nobody will ever see. What CI does
   *not* cover is the Blargg/Mooneye suites, since `test-roms/` is gitignored and they skip
   themselves; run `just test-roms` locally after a batch of dependency merges.
-- **`RomPlayer.svelte` imports `game-koi` inside its event handler, not at module scope.**
-  Vite still walks a component's static imports during `astro build`'s SSG pass even under
-  `client:only`, and the package touches `AudioContext`/wasm/DOM as soon as it is
-  evaluated. A top-level import fails the *build*, not just the dev server — and the error
-  names the DOM global, not the import, so it reads like an Astro bug.
+- **The framework components (`docs/src/components/{svelte,react,preact,vue}/`) import
+  `game-koi` inside their event handler, not at module scope.** Vite still walks a
+  component's static imports during `astro build`'s SSG pass even under `client:only`, and
+  the package touches `AudioContext`/wasm/DOM as soon as it is evaluated. A top-level
+  import fails the *build*, not just the dev server — and the error names the DOM global,
+  not the import, so it reads like an Astro bug. (`import type` is erased and is fine; the
+  VanillaJS and Three.js pages use a plain `<script>`, which never runs at build time.)
+- **React and Preact both claim `.tsx`**, so each integration is given an `include` for
+  its own directory, and the Preact file carries a `@jsxImportSource preact` pragma since
+  `tsconfig.json`'s JSX settings are React's. A `.tsx` component outside both directories
+  gets whichever renderer Astro guesses.
 
 Version control is **jj (Jujutsu)** colocated with git (both `.jj/` and `.git/` exist). Use `jj` commands
 (`jj st`, `jj log`, `jj diff`) rather than `git` ones. The git repo has no commits yet; history lives in jj.

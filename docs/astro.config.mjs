@@ -3,6 +3,9 @@ import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 
 import svelte from '@astrojs/svelte';
+import react from '@astrojs/react';
+import preact from '@astrojs/preact';
+import vue from '@astrojs/vue';
 
 // readthedocs serves every version under its own path prefix — /en/latest/ for the
 // default version, /en/<pr-number>/ for a pull request preview, /en/<tag>/ for a tagged
@@ -27,7 +30,7 @@ const base = canonical.pathname.replace(/\/+$/, '') || undefined;
 
 // Astro and Starlight base-correct their own output — assets, page routes, the sidebar —
 // but a link written by hand is emitted exactly as typed. So **write internal links
-// relative** (`../examples/rom-player/`), never root-absolute (`/examples/rom-player/`):
+// relative** (`../examples/svelte/`), never root-absolute (`/examples/svelte/`):
 // the latter resolves against the server root rather than the version prefix and 404s,
 // and nothing catches it, because the build passes and only a click shows the problem.
 // That holds for .astro pages too. `import.meta.env.BASE_URL` is the other way, but it
@@ -50,14 +53,31 @@ export default defineConfig({
         title: 'game-koi',
         social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/KeeTraxx/game-koi' }],
         sidebar: [
-            { label: 'Getting started', slug: 'getting-started' },
             {
                 label: 'Examples',
                 items: [
-                    { label: 'ROM player', slug: 'examples/rom-player' },
-                    { label: 'Three.js scene', link: '/examples/threejs/' },
+                    { label: 'VanillaJS', slug: 'examples/vanilla-js' },
+                    { label: 'Svelte', slug: 'examples/svelte' },
+                    { label: 'React', slug: 'examples/react' },
+                    { label: 'Preact', slug: 'examples/preact' },
+                    { label: 'Vue.js', slug: 'examples/vue' },
+                    { label: 'Three.js', link: '/examples/threejs/' },
                 ],
             },
         ],
-		}), svelte()],
+    }),
+        svelte(),
+        // React and Preact both claim .tsx files, so each is told which directory is
+        // its own; without `include` Astro guesses per component and can pick wrong.
+        react({ include: ['**/components/react/**'] }),
+        preact({ include: ['**/components/preact/**'] }),
+        vue(),
+    ],
+    // Pages that were renamed when the docs became example-first. Astro base-corrects
+    // the *source* of a redirect but emits the destination exactly as written, so the
+    // base has to be prepended by hand or the redirect lands on the server root.
+    redirects: {
+        '/getting-started': `${base ?? ''}/examples/vanilla-js/`,
+        '/examples/rom-player': `${base ?? ''}/examples/svelte/`,
+    },
 });

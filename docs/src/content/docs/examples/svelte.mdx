@@ -1,0 +1,34 @@
+---
+title: Svelte
+description: The game-koi npm package in a Svelte 5 component.
+---
+
+import { Code } from '@astrojs/starlight/components';
+import RomPlayer from '../../../components/svelte/RomPlayer.svelte';
+import RomNotice from '../../../components/RomNotice.astro';
+import source from '../../../components/svelte/RomPlayer.svelte?raw';
+
+The same player as the [VanillaJS example](../vanilla-js/), as a Svelte 5 component.
+It uses the `game-koi` package from the public npm registry.
+
+## Try it
+
+<RomPlayer client:only="svelte" />
+
+<RomNotice />
+
+## The code
+
+Things specific to Svelte:
+
+- **`bind:this`** gives the component the canvas element to hand to `GameKoi.create`.
+- **`koi` is a plain variable, not `$state`.** The markup never reads it, so making it
+  reactive would only add a proxy around the emulator.
+- **`game-koi` is imported inside the handler.** The package touches `AudioContext`
+  and wasm as soon as it is evaluated, so it must not load during SvelteKit's (or
+  Astro's) server-side render. The `import type` at the top is erased at compile time
+  and is safe.
+- **`onDestroy` calls `dispose()`**, which stops the frame loop, removes the keyboard
+  listeners and closes the audio context.
+
+<Code code={source} lang="svelte" title="RomPlayer.svelte" />

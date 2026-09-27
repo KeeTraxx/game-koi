@@ -1,0 +1,45 @@
+---
+title: Preact
+description: The game-koi npm package in a Preact component.
+---
+
+import { Code, Tabs, TabItem } from '@astrojs/starlight/components';
+import RomPlayer from '../../../components/preact/RomPlayer.tsx';
+import RomNotice from '../../../components/RomNotice.astro';
+import source from '../../../components/preact/RomPlayer.tsx?raw';
+import css from '../../../components/rom-player.css?raw';
+
+The same player as the [VanillaJS example](../vanilla-js/), as a Preact function
+component. It uses the `game-koi` package from the public npm registry.
+
+## Try it
+
+<RomPlayer client:only="preact" />
+
+<RomNotice />
+
+## The code
+
+The component is almost line for line the [React example](../react/). The differences
+are Preact's own:
+
+- **Hooks come from `preact/hooks`**, and the event type is Preact's `TargetedEvent`.
+- **Plain `class` works.** Preact passes attributes through to the DOM as written, so
+  `className` is optional.
+- **`onChange` is the DOM's native `change` event**, not React's synthetic one. For a
+  file input the two behave the same.
+- **The `@jsxImportSource preact` pragma** is only needed because this site also has
+  React components. In a Preact-only project, your `tsconfig.json` sets it once.
+
+As in React, the emulator lives in a ref, `create` runs in the change handler (browsers
+only start audio from a user gesture), the effect's cleanup calls `dispose()`, and
+`game-koi` is imported lazily so it never loads during a server-side render.
+
+<Tabs>
+	<TabItem label="RomPlayer.tsx">
+		<Code code={source} lang="tsx" title="RomPlayer.tsx" />
+	</TabItem>
+	<TabItem label="rom-player.css">
+		<Code code={css} lang="css" title="rom-player.css" />
+	</TabItem>
+</Tabs>

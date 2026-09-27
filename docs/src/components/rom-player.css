@@ -1,0 +1,23 @@
+/* Shared by the VanillaJS, React and Preact examples. The Svelte and Vue examples carry
+   the same rules in their own scoped <style> blocks, which is the idiomatic place for
+   them in a single-file component. */
+.rom-player {
+	display: flex;
+	flex-direction: column;
+	gap: 0.75rem;
+	align-items: flex-start;
+}
+
+.rom-player canvas {
+	/* 2x the Game Boy's 160x144, kept blocky rather than smoothed. */
+	width: 320px;
+	height: 288px;
+	image-rendering: pixelated;
+	background: black;
+	border: 1px solid var(--sl-color-gray-5);
+}
+
+.rom-player .status {
+	font-family: var(--__sl-font-mono, monospace);
+	margin: 0;
+}

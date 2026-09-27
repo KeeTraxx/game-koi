@@ -1,0 +1,57 @@
+---
+title: VanillaJS
+description: Install the game-koi npm package and run it on a plain page, no framework.
+---
+
+import { Code, Tabs, TabItem } from '@astrojs/starlight/components';
+import VanillaPlayer from '../../../components/VanillaPlayer.astro';
+import RomNotice from '../../../components/RomNotice.astro';
+import source from '../../../scripts/vanilla-example.ts?raw';
+import css from '../../../components/rom-player.css?raw';
+
+`game-koi` is the browser build of the emulator: a WebAssembly module wrapped in a small
+TypeScript API that handles canvas rendering, audio, frame pacing and input for you.
+Every example on this site uses the same API, so start here even if you use a framework.
+
+```sh
+npm install game-koi
+```
+
+## Try it
+
+<VanillaPlayer />
+
+<RomNotice />
+
+## The code
+
+You need a 160×144 canvas and the ROM's bytes as a `Uint8Array`. `GameKoi.create` does
+the rest. Call it from a user gesture (a click or a file pick), since browsers keep a
+freshly created `AudioContext` suspended otherwise.
+
+<Tabs>
+	<TabItem label="main.ts">
+		<Code code={source} lang="ts" title="main.ts" />
+	</TabItem>
+	<TabItem label="index.html">
+		```html title="index.html"
+		<div class="rom-player">
+		  <canvas id="screen" width="160" height="144"></canvas>
+		  <p class="status" id="status">ready — choose a ROM (.gb)</p>
+		  <input type="file" accept=".gb" id="rom" />
+		</div>
+		<script type="module" src="./main.ts"></script>
+		```
+	</TabItem>
+	<TabItem label="rom-player.css">
+		<Code code={css} lang="css" title="rom-player.css" />
+	</TabItem>
+</Tabs>
+
+## Beyond the basics
+
+A `GameKoi` instance also has `pause()`, `resume()`, `press()`/`release()` for on-screen
+buttons, `on('press' | 'release', ...)` events, and `dispose()` to shut it down. The
+keyboard map, gamepad map and debug overlay key are all options to `create`. The
+package's own README documents every one of them:
+[`crates/game-koi-web/js/README.md`](https://github.com/KeeTraxx/game-koi/blob/main/crates/game-koi-web/js/README.md).

@@ -1,0 +1,43 @@
+---
+title: React
+description: The game-koi npm package in a React component.
+---
+
+import { Code, Tabs, TabItem } from '@astrojs/starlight/components';
+import RomPlayer from '../../../components/react/RomPlayer.tsx';
+import RomNotice from '../../../components/RomNotice.astro';
+import source from '../../../components/react/RomPlayer.tsx?raw';
+import css from '../../../components/rom-player.css?raw';
+
+The same player as the [VanillaJS example](../vanilla-js/), as a React function
+component. It uses the `game-koi` package from the public npm registry.
+
+## Try it
+
+<RomPlayer client:only="react" />
+
+<RomNotice />
+
+## The code
+
+Things specific to React:
+
+- **The emulator lives in a `useRef`, not `useState`.** It is never rendered, and
+  creating or replacing it should not cause a re-render. Only the status line is state.
+- **`create` runs in the change handler, not in an effect.** Browsers only start audio
+  from a user gesture, so an effect that creates the emulator on mount would come up
+  silent. This also avoids Strict Mode's double-run of effects building two emulators.
+- **The effect's cleanup calls `dispose()`**, which stops the frame loop, removes the
+  keyboard listeners and closes the audio context.
+- **`game-koi` is imported inside the handler.** The package touches `AudioContext`
+  and wasm as soon as it is evaluated, so it must not load during a server-side render
+  (Next.js, Remix, Astro). If your app is client-only, a normal top-level import works.
+
+<Tabs>
+	<TabItem label="RomPlayer.tsx">
+		<Code code={source} lang="tsx" title="RomPlayer.tsx" />
+	</TabItem>
+	<TabItem label="rom-player.css">
+		<Code code={css} lang="css" title="rom-player.css" />
+	</TabItem>
+</Tabs>

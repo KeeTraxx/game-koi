@@ -13,7 +13,7 @@
   "dependencies": {
     "@astrojs/preact": "^6.0.5",
     "@astrojs/react": "^7.0.0",
-    "@astrojs/starlight": "^0.42.1",
+    "@astrojs/starlight": "^0.43.0",
     "@astrojs/svelte": "^9.0.1",
     "@astrojs/vue": "^7.0.3",
     "astro": "^7.2.10",
